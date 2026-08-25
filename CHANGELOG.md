@@ -13,7 +13,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Accept low lines wherever Part 21's `UPPER` production permits them, including
   schema/user-defined keywords and enumeration values.
 - Ignore `\\N\\` and `\\F\\` print directives inside wide-string payloads,
-  between doubled apostrophes, and before the physical-file marker.
+  between doubled apostrophes, and before the physical-file marker, while
+  preserving escaped literal `\\N\\`/`\\F\\` text.
 
 ## [0.2.0] - 2026-08-25
 

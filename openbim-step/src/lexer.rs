@@ -75,6 +75,32 @@ fn strip_print_directives(bytes: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
     Cow::Owned(stripped)
 }
 
+fn strip_text_print_directives(bytes: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
+    let mut stripped: Option<Vec<u8>> = None;
+    let mut position = 0;
+    while position < bytes.len() {
+        if bytes.get(position..position + 2) == Some(b"\\\\") {
+            if let Some(output) = &mut stripped {
+                output.extend_from_slice(b"\\\\");
+            }
+            position += 2;
+        } else if matches!(bytes.get(position..position + 3), Some(b"\\N\\" | b"\\F\\")) {
+            stripped.get_or_insert_with(|| {
+                let mut output = Vec::with_capacity(bytes.len());
+                output.extend_from_slice(&bytes[..position]);
+                output
+            });
+            position += 3;
+        } else {
+            if let Some(output) = &mut stripped {
+                output.push(bytes[position]);
+            }
+            position += 1;
+        }
+    }
+    stripped.map_or(bytes, Cow::Owned)
+}
+
 impl<'a> Lexer<'a> {
     /// Starts tokenizing `input`.
     #[must_use]
@@ -297,7 +323,7 @@ impl<'a> Lexer<'a> {
                     self.position = end;
                     continue;
                 }
-                let text = strip_print_directives(self.token_bytes(body_start, self.position));
+                let text = strip_text_print_directives(self.token_bytes(body_start, self.position));
                 self.position += 1;
                 return Ok(Token::Text(text));
             }

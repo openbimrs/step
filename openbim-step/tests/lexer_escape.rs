@@ -113,6 +113,27 @@ fn print_directives_are_ignored_inside_wide_text_and_quote_doubling() {
 }
 
 #[test]
+fn escaped_literal_print_directive_text_is_preserved() {
+    let tokens = Lexer::new(br"'\\N\\' '\\F\\'")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("escaped reverse solidi are text, not print directives");
+    assert_eq!(
+        decode(match &tokens[0].value {
+            Token::Text(value) => value,
+            _ => unreachable!(),
+        }),
+        "\\N\\"
+    );
+    assert_eq!(
+        decode(match &tokens[1].value {
+            Token::Text(value) => value,
+            _ => unreachable!(),
+        }),
+        "\\F\\"
+    );
+}
+
+#[test]
 fn line_delimiters_are_ignored_even_inside_tokens() {
     let tokens = Lexer::new(b"\\N\\/\n* c *\r/ #1\n2=ENT\rITY('it'\n's',1.\t0,\"0A\\F\\B\");")
         .collect::<Result<Vec<_>, _>>()
