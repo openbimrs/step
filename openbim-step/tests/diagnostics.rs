@@ -11,7 +11,8 @@ fn syntax_errors_carry_source_spans_and_resolve_to_line_columns() {
     let location = source.location(span);
     assert_eq!(location.source_name, "broken.stp");
     assert_eq!(location.line, 3);
-    assert!(location.column > 1);
+    assert_eq!(location.column, 1);
+    assert!(error.detail().contains("FILE_DESCRIPTION"));
     assert!(!location.line_text.is_empty());
 }
 

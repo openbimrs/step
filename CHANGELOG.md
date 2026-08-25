@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-25
+
+### Fixed
+
+- Enforced mandatory Part 21 header records exactly once and in order.
+- Ignored line delimiters throughout lexical tokens while retaining original source spans.
+- Preserved malformed wide escapes instead of replacing or discarding their bytes.
+- Added `\\N\\`/`\\F\\` print-directive decoding and standards-compliant `\\X4\\` output for supplementary Unicode.
+- Rejected user-defined keywords in dotted enumeration values.
+
+## [0.1.0] - 2026-08-25
+
 ### Added
 
 - Generic ISO 10303-21 tokens, spans, diagnostics, escaping, syntax model, parser, writer, record partitioning, and event/sink parsing.
@@ -13,3 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Standalone architecture, round-trip, diagnostics, partition, event, and external-corpus gates.
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
+
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/openbimrs/step/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/openbimrs/step/releases/tag/v0.1.0

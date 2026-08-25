@@ -104,6 +104,7 @@ struct Parser<'a> {
     lookahead: Option<Spanned<Token<'a>>>,
     last_end: usize,
     phase: Phase,
+    header_records_seen: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -113,6 +114,7 @@ impl<'a> Parser<'a> {
             lookahead: None,
             last_end: 0,
             phase: Phase::BeforeStart,
+            header_records_seen: 0,
         }
     }
 
@@ -157,6 +159,12 @@ impl<'a> Parser<'a> {
                     self.expect_semicolon("after ENDSEC")?;
                     match self.phase {
                         Phase::Header => {
+                            if self.header_records_seen < 3 {
+                                return Err(StepError::syntax(
+                                    token.span,
+                                    "missing mandatory STEP header record",
+                                ));
+                            }
                             sink.event(Event::EndHeader);
                             self.phase = Phase::BeforeData;
                         }
@@ -180,10 +188,11 @@ impl<'a> Parser<'a> {
                     self.phase = Phase::Done;
                 }
                 Token::Name(name) if self.phase == Phase::Header => {
+                    self.validate_header_record(&name, token.span)?;
                     let parameters = self.parse_arguments()?;
                     self.expect_semicolon("after header record")?;
                     sink.event(Event::HeaderRecord(HeaderRecord {
-                        name: upper(name),
+                        name: upper(&name),
                         parameters,
                     }));
                 }
@@ -196,7 +205,7 @@ impl<'a> Parser<'a> {
                         )
                     })?;
                     let records = match record_token.value {
-                        Token::Name(name) => vec![self.parse_named_record(name)?],
+                        Token::Name(name) => vec![self.parse_named_record(&name)?],
                         Token::OpenParen => {
                             let mut records = Vec::new();
                             loop {
@@ -215,7 +224,7 @@ impl<'a> Parser<'a> {
                                         "expected complex record name",
                                     ));
                                 };
-                                records.push(self.parse_named_record(name)?);
+                                records.push(self.parse_named_record(&name)?);
                             }
                             let close = self.next()?.ok_or_else(|| {
                                 StepError::syntax(self.eof_span(), "unterminated complex instance")
@@ -244,7 +253,7 @@ impl<'a> Parser<'a> {
                     self.expect_semicolon("after data record")?;
                     sink.event(Event::DataRecord(DataRecord {
                         id: InstanceId::new(
-                            std::str::from_utf8(id).expect("instance digits are ASCII"),
+                            std::str::from_utf8(&id).expect("instance digits are ASCII"),
                         )
                         .expect("lexer validates instance ids"),
                         records,
@@ -266,6 +275,28 @@ impl<'a> Parser<'a> {
             };
             return Err(StepError::syntax(self.eof_span(), detail));
         }
+        Ok(())
+    }
+
+    fn validate_header_record(&mut self, name: &[u8], span: Span) -> Result<(), StepError> {
+        const REQUIRED: [&[u8]; 3] = [b"FILE_DESCRIPTION", b"FILE_NAME", b"FILE_SCHEMA"];
+        if let Some(expected) = REQUIRED.get(self.header_records_seen) {
+            if !name.eq_ignore_ascii_case(expected) {
+                return Err(StepError::syntax(
+                    span,
+                    format!(
+                        "expected mandatory {} header record",
+                        String::from_utf8_lossy(expected)
+                    ),
+                ));
+            }
+        } else if REQUIRED
+            .iter()
+            .any(|required| name.eq_ignore_ascii_case(required))
+        {
+            return Err(StepError::syntax(span, "duplicate mandatory header record"));
+        }
+        self.header_records_seen += 1;
         Ok(())
     }
 
@@ -331,15 +362,19 @@ impl<'a> Parser<'a> {
             Token::Dollar => Ok(Parameter::Null),
             Token::Star => Ok(Parameter::Derived),
             Token::Id(id) => Ok(Parameter::Ref(
-                InstanceId::new(std::str::from_utf8(id).expect("instance digits are ASCII"))
+                InstanceId::new(std::str::from_utf8(&id).expect("instance digits are ASCII"))
                     .expect("lexer validates instance ids"),
             )),
             Token::Integer(value) => Ok(Parameter::Integer(
-                String::from_utf8_lossy(value).into_owned(),
+                String::from_utf8_lossy(&value).into_owned(),
             )),
-            Token::Real(value) => Ok(Parameter::Real(String::from_utf8_lossy(value).into_owned())),
-            Token::Text(raw) => Ok(Parameter::Text(escape::decode(raw))),
-            Token::Binary(raw) => Ok(Parameter::Binary(String::from_utf8_lossy(raw).into_owned())),
+            Token::Real(value) => Ok(Parameter::Real(
+                String::from_utf8_lossy(&value).into_owned(),
+            )),
+            Token::Text(raw) => Ok(Parameter::Text(escape::decode(&raw))),
+            Token::Binary(raw) => Ok(Parameter::Binary(
+                String::from_utf8_lossy(&raw).into_owned(),
+            )),
             Token::Keyword(keyword) if keyword.eq_ignore_ascii_case(b"T") => {
                 Ok(Parameter::Bool(true))
             }
@@ -349,7 +384,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(keyword) if keyword.eq_ignore_ascii_case(b"U") => {
                 Ok(Parameter::LogicalUnknown)
             }
-            Token::Keyword(keyword) => Ok(Parameter::Enum(upper(keyword))),
+            Token::Keyword(keyword) => Ok(Parameter::Enum(upper(&keyword))),
             Token::OpenParen => Ok(Parameter::List(self.parse_parameter_list(depth + 1)?)),
             Token::Name(name) => {
                 let Some(next) = self.peek()? else {
@@ -372,7 +407,7 @@ impl<'a> Parser<'a> {
                     Box::new(Parameter::List(parameters))
                 };
                 Ok(Parameter::Typed {
-                    type_name: upper(name),
+                    type_name: upper(&name),
                     value,
                 })
             }

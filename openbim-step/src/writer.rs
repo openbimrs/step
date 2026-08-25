@@ -5,7 +5,7 @@
 
 use crate::escape;
 use crate::lexer::{Lexer, Token};
-use crate::{Exchange, Parameter, Record};
+use crate::{Exchange, HeaderRecord, Parameter, Record};
 use std::io::{self, Write};
 
 /// Writes a complete physical file.
@@ -18,6 +18,7 @@ pub fn write<S: AsRef<str>, W: Write + ?Sized>(
     exchange: &Exchange<S>,
     output: &mut W,
 ) -> io::Result<()> {
+    validate_header(&exchange.header.records)?;
     writeln!(output, "ISO-10303-21;")?;
     writeln!(output, "HEADER;")?;
     for record in &exchange.header.records {
@@ -64,6 +65,26 @@ fn invalid(detail: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, detail)
 }
 
+fn validate_header<S: AsRef<str>>(records: &[HeaderRecord<S>]) -> io::Result<()> {
+    const REQUIRED: [&str; 3] = ["FILE_DESCRIPTION", "FILE_NAME", "FILE_SCHEMA"];
+    if records.len() < REQUIRED.len() {
+        return Err(invalid("missing mandatory STEP header record"));
+    }
+    for (record, required) in records.iter().zip(REQUIRED) {
+        if !record.name.as_ref().eq_ignore_ascii_case(required) {
+            return Err(invalid("mandatory STEP header records are out of order"));
+        }
+    }
+    if records[REQUIRED.len()..].iter().any(|record| {
+        REQUIRED
+            .iter()
+            .any(|required| record.name.as_ref().eq_ignore_ascii_case(required))
+    }) {
+        return Err(invalid("duplicate mandatory STEP header record"));
+    }
+    Ok(())
+}
+
 fn require_identifier(value: &str) -> io::Result<()> {
     let (keyword, user_defined) = value
         .strip_prefix('!')
@@ -81,6 +102,13 @@ fn require_identifier(value: &str) -> io::Result<()> {
 fn write_identifier<W: Write + ?Sized>(value: &str, output: &mut W) -> io::Result<()> {
     require_identifier(value)?;
     output.write_all(value.to_ascii_uppercase().as_bytes())
+}
+
+fn write_enumeration<W: Write + ?Sized>(value: &str, output: &mut W) -> io::Result<()> {
+    if value.starts_with('!') {
+        return Err(invalid("invalid STEP enumeration"));
+    }
+    write_identifier(value, output)
 }
 
 fn require_number(value: &str, real: bool) -> io::Result<()> {
@@ -181,7 +209,7 @@ fn write_parameter_at<S: AsRef<str>, W: Write + ?Sized>(
         }
         Parameter::Enum(value) => {
             write!(output, ".")?;
-            write_identifier(value.as_ref(), output)?;
+            write_enumeration(value.as_ref(), output)?;
             write!(output, ".")
         }
         Parameter::Ref(id) => write!(output, "#{id_value}", id_value = id.as_str()),

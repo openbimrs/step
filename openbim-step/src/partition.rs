@@ -36,7 +36,7 @@ impl Partition {
 pub fn data_record_spans(input: &[u8]) -> Result<Vec<Span>, StepError> {
     let tokens = Lexer::new(input).collect::<Result<Vec<_>, _>>()?;
     let has_data = tokens.windows(2).any(|window| {
-        matches!(window[0].value, Token::Name(name) if name.eq_ignore_ascii_case(b"DATA"))
+        matches!(&window[0].value, Token::Name(name) if name.eq_ignore_ascii_case(b"DATA"))
             && window[1].value == Token::Semicolon
     });
     let mut in_data = !has_data;
@@ -46,7 +46,7 @@ pub fn data_record_spans(input: &[u8]) -> Result<Vec<Span>, StepError> {
 
     while index < tokens.len() {
         let token = &tokens[index];
-        if let Token::Name(name) = token.value {
+        if let Token::Name(name) = &token.value {
             if has_data && name.eq_ignore_ascii_case(b"DATA") && active_start.is_none() {
                 in_data = true;
                 index += 1;

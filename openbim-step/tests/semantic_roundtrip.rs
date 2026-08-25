@@ -21,6 +21,7 @@ END-ISO-10303-21;
 #[test]
 fn detects_magic_with_bom_and_whitespace() {
     assert!(is_step_file(b"\xEF\xBB\xBF\r\n ISO-10303-21;"));
+    assert!(is_step_file(b"ISO-10303-\n21;"));
     assert!(!is_step_file(b"ISO-10303-28;"));
 }
 
@@ -35,6 +36,46 @@ fn physical_file_markers_are_exact_and_ordered() {
         format!("{valid}JUNK;"),
     ] {
         assert!(parse(invalid.as_bytes()).is_err(), "accepted {invalid}");
+    }
+}
+
+#[test]
+fn mandatory_header_records_are_present_once_and_in_order() {
+    let valid = "ISO-10303-21;HEADER;FILE_DESCRIPTION(('x'),'2;1');FILE_NAME('x','',(),(),'','','');FILE_SCHEMA(('X'));ENDSEC;DATA;#1=X($);ENDSEC;END-ISO-10303-21;";
+    let invalid_inputs = [
+        valid.replace("FILE_DESCRIPTION(('x'),'2;1');", ""),
+        valid.replace(
+            "FILE_DESCRIPTION(('x'),'2;1');FILE_NAME('x','',(),(),'','','');",
+            "FILE_NAME('x','',(),(),'','','');FILE_DESCRIPTION(('x'),'2;1');",
+        ),
+        valid.replace(
+            "FILE_SCHEMA(('X'));",
+            "FILE_SCHEMA(('X'));FILE_SCHEMA(('X'));",
+        ),
+    ];
+    for input in invalid_inputs {
+        assert!(parse(input.as_bytes()).is_err(), "accepted {input}");
+    }
+
+    let exchange = parse(valid.as_bytes()).unwrap();
+    let invalid_headers = [
+        exchange.header.records[1..].to_vec(),
+        vec![
+            exchange.header.records[1].clone(),
+            exchange.header.records[0].clone(),
+            exchange.header.records[2].clone(),
+        ],
+        vec![
+            exchange.header.records[0].clone(),
+            exchange.header.records[1].clone(),
+            exchange.header.records[2].clone(),
+            exchange.header.records[2].clone(),
+        ],
+    ];
+    for records in invalid_headers {
+        let mut invalid = exchange.clone();
+        invalid.header.records = records;
+        assert!(write_to_string(&invalid).is_err());
     }
 }
 
@@ -169,6 +210,7 @@ fn writer_rejects_invalid_unescaped_parameter_lexemes() {
         Parameter::Real("1E3".into()),
         Parameter::Binary("0FG".into()),
         Parameter::Enum("X.Y".into()),
+        Parameter::Enum("!VENDOR".into()),
         Parameter::Typed {
             type_name: "X)".into(),
             value: Box::new(Parameter::Null),

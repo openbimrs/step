@@ -4,24 +4,25 @@
 //! and legacy producers may place non-UTF-8 bytes inside string literals.
 
 use crate::{Span, Spanned, StepError};
+use std::borrow::Cow;
 
 /// One lexical unit in a physical file.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token<'a> {
     /// `#42`.
-    Id(&'a [u8]),
+    Id(Cow<'a, [u8]>),
     /// A quoted string body, still escaped.
-    Text(&'a [u8]),
+    Text(Cow<'a, [u8]>),
     /// A binary literal body.
-    Binary(&'a [u8]),
+    Binary(Cow<'a, [u8]>),
     /// A dotted keyword or enumeration name, without dots.
-    Keyword(&'a [u8]),
+    Keyword(Cow<'a, [u8]>),
     /// A bare identifier or physical-file marker.
-    Name(&'a [u8]),
+    Name(Cow<'a, [u8]>),
     /// Integer lexical bytes.
-    Integer(&'a [u8]),
+    Integer(Cow<'a, [u8]>),
     /// Real lexical bytes.
-    Real(&'a [u8]),
+    Real(Cow<'a, [u8]>),
     /// `$`.
     Dollar,
     /// `*`.
@@ -50,6 +51,10 @@ fn is_valid_binary(body: &[u8]) -> bool {
     matches!(body.first(), Some(b'0'..=b'3')) && body[1..].iter().all(u8::is_ascii_hexdigit)
 }
 
+const fn is_ignored_control(byte: u8) -> bool {
+    matches!(byte, b'\t' | b'\n' | b'\r' | 0x0c)
+}
+
 impl<'a> Lexer<'a> {
     /// Starts tokenizing `input`.
     #[must_use]
@@ -67,8 +72,50 @@ impl<'a> Lexer<'a> {
         self.position
     }
 
+    fn skip_ignored_controls(&mut self) {
+        while self
+            .input
+            .get(self.position)
+            .is_some_and(|byte| is_ignored_control(*byte))
+        {
+            self.position += 1;
+        }
+    }
+
+    fn token_bytes(&self, start: usize, end: usize) -> Cow<'a, [u8]> {
+        let bytes = &self.input[start..end];
+        if bytes.iter().any(|byte| is_ignored_control(*byte)) {
+            Cow::Owned(
+                bytes
+                    .iter()
+                    .copied()
+                    .filter(|byte| !is_ignored_control(*byte))
+                    .collect(),
+            )
+        } else {
+            Cow::Borrowed(bytes)
+        }
+    }
+
+    fn match_ignoring_controls(&self, start: usize, expected: &[u8]) -> Option<usize> {
+        let mut position = start;
+        for &expected_byte in expected {
+            while self
+                .input
+                .get(position)
+                .is_some_and(|byte| is_ignored_control(*byte))
+            {
+                position += 1;
+            }
+            if self.input.get(position) != Some(&expected_byte) {
+                return None;
+            }
+            position += 1;
+        }
+        Some(position)
+    }
+
     /// Produces the next spanned token.
-    ///
     /// # Errors
     ///
     /// Returns a syntax diagnostic for malformed literals, comments, numbers,
@@ -135,19 +182,23 @@ impl<'a> Lexer<'a> {
             {
                 self.position += 1;
             }
-            if self.input[self.position..].starts_with(b"/*") {
+            if let Some(body_start) = self.match_ignoring_controls(self.position, b"/*") {
                 let start = self.position;
-                let Some(end) = self.input[self.position + 2..]
-                    .windows(2)
-                    .position(|window| window == b"*/")
-                else {
-                    self.position = self.input.len();
-                    return Err(StepError::syntax(
-                        Span::new(start, self.position),
-                        "unterminated comment",
-                    ));
-                };
-                self.position += 2 + end + 2;
+                let mut cursor = body_start;
+                loop {
+                    if let Some(end) = self.match_ignoring_controls(cursor, b"*/") {
+                        self.position = end;
+                        break;
+                    }
+                    if cursor >= self.input.len() {
+                        self.position = self.input.len();
+                        return Err(StepError::syntax(
+                            Span::new(start, self.position),
+                            "unterminated comment",
+                        ));
+                    }
+                    cursor += 1;
+                }
                 continue;
             }
             return Ok(());
@@ -161,21 +212,26 @@ impl<'a> Lexer<'a> {
 
     fn lex_id(&mut self, start: usize) -> Result<Token<'a>, StepError> {
         self.position += 1;
+        self.skip_ignored_controls();
         let digits = self.position;
-        while self
-            .input
-            .get(self.position)
-            .is_some_and(u8::is_ascii_digit)
-        {
-            self.position += 1;
+        let mut saw_digit = false;
+        while let Some(&byte) = self.input.get(self.position) {
+            if is_ignored_control(byte) {
+                self.position += 1;
+            } else if byte.is_ascii_digit() {
+                saw_digit = true;
+                self.position += 1;
+            } else {
+                break;
+            }
         }
-        if digits == self.position {
+        if !saw_digit {
             return Err(StepError::syntax(
                 Span::new(start, self.position),
                 "expected digits after '#'",
             ));
         }
-        Ok(Token::Id(&self.input[digits..self.position]))
+        Ok(Token::Id(self.token_bytes(digits, self.position)))
     }
 
     fn lex_text(&mut self, start: usize) -> Result<Token<'a>, StepError> {
@@ -183,11 +239,11 @@ impl<'a> Lexer<'a> {
         let body_start = self.position;
         while let Some(&byte) = self.input.get(self.position) {
             if byte == b'\'' {
-                if self.input.get(self.position + 1) == Some(&b'\'') {
-                    self.position += 2;
+                if let Some(end) = self.match_ignoring_controls(self.position, b"''") {
+                    self.position = end;
                     continue;
                 }
-                let text = &self.input[body_start..self.position];
+                let text = self.token_bytes(body_start, self.position);
                 self.position += 1;
                 return Ok(Token::Text(text));
             }
@@ -204,9 +260,9 @@ impl<'a> Lexer<'a> {
         let body_start = self.position;
         while let Some(&byte) = self.input.get(self.position) {
             if byte == b'"' {
-                let body = &self.input[body_start..self.position];
+                let body = self.token_bytes(body_start, self.position);
                 self.position += 1;
-                if !is_valid_binary(body) {
+                if !is_valid_binary(body.as_ref()) {
                     return Err(StepError::syntax(
                         Span::new(start, self.position),
                         "invalid binary literal",
@@ -226,15 +282,19 @@ impl<'a> Lexer<'a> {
         self.position += 1;
         let body_start = self.position;
         while let Some(&byte) = self.input.get(self.position) {
+            if is_ignored_control(byte) {
+                self.position += 1;
+                continue;
+            }
             if byte == b'.' {
-                if self.position == body_start {
+                let body = self.token_bytes(body_start, self.position);
+                if body.is_empty() {
                     self.position += 1;
                     return Err(StepError::syntax(
                         Span::new(start, self.position),
                         "empty dotted keyword",
                     ));
                 }
-                let body = &self.input[body_start..self.position];
                 self.position += 1;
                 return Ok(Token::Keyword(body));
             }
@@ -251,18 +311,22 @@ impl<'a> Lexer<'a> {
 
     fn lex_name(&mut self) -> Token<'a> {
         let start = self.position;
-        while self
-            .input
-            .get(self.position)
-            .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-        {
-            self.position += 1;
+        while let Some(&byte) = self.input.get(self.position) {
+            if is_ignored_control(byte)
+                || byte.is_ascii_alphanumeric()
+                || matches!(byte, b'_' | b'-')
+            {
+                self.position += 1;
+            } else {
+                break;
+            }
         }
-        Token::Name(&self.input[start..self.position])
+        Token::Name(self.token_bytes(start, self.position))
     }
 
     fn lex_user_defined_name(&mut self, start: usize) -> Result<Token<'a>, StepError> {
         self.position += 1;
+        self.skip_ignored_controls();
         let body_start = self.position;
         if !self
             .input
@@ -275,12 +339,12 @@ impl<'a> Lexer<'a> {
             ));
         }
         self.position += 1;
-        while self
-            .input
-            .get(self.position)
-            .is_some_and(u8::is_ascii_alphanumeric)
-        {
-            self.position += 1;
+        while let Some(&byte) = self.input.get(self.position) {
+            if is_ignored_control(byte) || byte.is_ascii_alphanumeric() {
+                self.position += 1;
+            } else {
+                break;
+            }
         }
         if matches!(self.input.get(self.position), Some(b'_' | b'-')) {
             return Err(StepError::syntax(
@@ -288,39 +352,53 @@ impl<'a> Lexer<'a> {
                 "invalid user-defined keyword",
             ));
         }
-        Ok(Token::Name(&self.input[start..self.position]))
+        Ok(Token::Name(self.token_bytes(start, self.position)))
     }
 
     fn lex_number(&mut self, start: usize) -> Result<Token<'a>, StepError> {
         if matches!(self.input.get(self.position), Some(b'+' | b'-')) {
             self.position += 1;
+            self.skip_ignored_controls();
         }
-        let integer_start = self.position;
-        while self
-            .input
-            .get(self.position)
-            .is_some_and(u8::is_ascii_digit)
-        {
-            self.position += 1;
+        let mut integer_digits = 0;
+        loop {
+            self.skip_ignored_controls();
+            if self
+                .input
+                .get(self.position)
+                .is_some_and(u8::is_ascii_digit)
+            {
+                integer_digits += 1;
+                self.position += 1;
+            } else {
+                break;
+            }
         }
-        if self.position == integer_start {
+        if integer_digits == 0 {
             return Err(StepError::syntax(
                 Span::new(start, self.position),
                 "number has no leading digits",
             ));
         }
+        self.skip_ignored_controls();
         let mut real = false;
         if self.input.get(self.position) == Some(&b'.') {
             real = true;
             self.position += 1;
-            while self
-                .input
-                .get(self.position)
-                .is_some_and(u8::is_ascii_digit)
-            {
-                self.position += 1;
+            loop {
+                self.skip_ignored_controls();
+                if self
+                    .input
+                    .get(self.position)
+                    .is_some_and(u8::is_ascii_digit)
+                {
+                    self.position += 1;
+                } else {
+                    break;
+                }
             }
         }
+        self.skip_ignored_controls();
         if matches!(self.input.get(self.position), Some(b'e' | b'E')) {
             if !real {
                 return Err(StepError::syntax(
@@ -329,25 +407,33 @@ impl<'a> Lexer<'a> {
                 ));
             }
             self.position += 1;
+            self.skip_ignored_controls();
             if matches!(self.input.get(self.position), Some(b'+' | b'-')) {
                 self.position += 1;
+                self.skip_ignored_controls();
             }
-            let exponent_start = self.position;
-            while self
-                .input
-                .get(self.position)
-                .is_some_and(u8::is_ascii_digit)
-            {
-                self.position += 1;
+            let mut exponent_digits = 0;
+            loop {
+                self.skip_ignored_controls();
+                if self
+                    .input
+                    .get(self.position)
+                    .is_some_and(u8::is_ascii_digit)
+                {
+                    exponent_digits += 1;
+                    self.position += 1;
+                } else {
+                    break;
+                }
             }
-            if exponent_start == self.position {
+            if exponent_digits == 0 {
                 return Err(StepError::syntax(
                     Span::new(start, self.position),
                     "real exponent has no digits",
                 ));
             }
         }
-        let text = &self.input[start..self.position];
+        let text = self.token_bytes(start, self.position);
         Ok(if real {
             Token::Real(text)
         } else {

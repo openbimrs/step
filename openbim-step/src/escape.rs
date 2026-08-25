@@ -1,7 +1,7 @@
 //! STEP string-literal escape decoding and encoding.
 //!
-//! Supported forms are doubled apostrophes, doubled backslashes, `\S\`,
-//! `\X\`, UTF-16BE `\X2\...\X0\`, and UTF-32BE `\X4\...\X0\`.
+//! Supported forms are doubled apostrophes, doubled backslashes, `\N\`, `\F\`,
+//! `\S\`, `\X\`, UTF-16BE `\X2\...\X0\`, and UTF-32BE `\X4\...\X0\`.
 
 /// Decodes a STEP string literal body to Unicode.
 ///
@@ -48,6 +48,7 @@ fn decode_escape(input: &[u8], output: &mut String, alphabet: &mut u8) -> Option
             output.push('\\');
             Some(2)
         }
+        b'N' | b'n' | b'F' | b'f' if input.get(2) == Some(&b'\\') => Some(3),
         b'S' | b's' if input.get(2) == Some(&b'\\') => {
             let byte = input.get(3)?.wrapping_add(128);
             output.push(decode_alphabet_byte(*alphabet, byte));
@@ -66,8 +67,12 @@ fn decode_escape(input: &[u8], output: &mut String, alphabet: &mut u8) -> Option
                 output.push(char::from(byte));
                 Some(5)
             }
-            b'2' => decode_wide(input, output, 4),
-            b'4' => decode_wide(input, output, 8),
+            b'2' => {
+                decode_wide(input, output, 4).or_else(|| preserve_malformed_wide(input, output))
+            }
+            b'4' => {
+                decode_wide(input, output, 8).or_else(|| preserve_malformed_wide(input, output))
+            }
             _ => None,
         },
         _ => None,
@@ -98,6 +103,16 @@ fn parse_hex(input: &[u8]) -> Option<u32> {
     u32::from_str_radix(std::str::from_utf8(input).ok()?, 16).ok()
 }
 
+fn preserve_malformed_wide(input: &[u8], output: &mut String) -> Option<usize> {
+    let end = input
+        .get(4..)?
+        .windows(4)
+        .position(|window| window.eq_ignore_ascii_case(b"\\X0\\"))?;
+    let consumed = 4 + end + 4;
+    output.push_str(&String::from_utf8_lossy(&input[..consumed]));
+    Some(consumed)
+}
+
 fn decode_wide(input: &[u8], output: &mut String, digits: usize) -> Option<usize> {
     if input.get(3) != Some(&b'\\') {
         return None;
@@ -121,15 +136,23 @@ fn decode_wide(input: &[u8], output: &mut String, digits: usize) -> Option<usize
         }
         position += digits;
     }
+    let mut decoded = String::new();
     if digits == 4 {
-        output.extend(std::char::decode_utf16(utf16).map(|value| value.unwrap_or('\u{fffd}')));
+        if utf16.is_empty() {
+            return None;
+        }
+        for value in std::char::decode_utf16(utf16) {
+            decoded.push(value.ok()?);
+        }
     } else {
-        output.extend(
-            utf32
-                .into_iter()
-                .map(|value| char::from_u32(value).unwrap_or('\u{fffd}')),
-        );
+        if utf32.is_empty() {
+            return None;
+        }
+        for value in utf32 {
+            decoded.push(char::from_u32(value)?);
+        }
     }
+    output.push_str(&decoded);
     Some(position)
 }
 
@@ -148,7 +171,8 @@ fn flush_utf16(pending: &mut Vec<u16>, output: &mut String) {
 /// Encodes Unicode as a STEP string literal body.
 ///
 /// Printable ASCII is retained, apostrophes and backslashes are doubled, and
-/// non-ASCII runs use UTF-16BE `\X2\` notation.
+/// BMP runs use UTF-16BE `\X2\` notation and supplementary characters use
+/// UTF-32BE `\X4\` notation.
 #[must_use]
 pub fn encode(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
@@ -174,9 +198,15 @@ pub fn encode(text: &str) -> String {
                 flush_utf16(&mut pending, &mut output);
                 output.push(value);
             }
-            value => {
+            value if u32::from(value) <= 0xffff => {
                 let mut units = [0_u16; 2];
                 pending.extend_from_slice(value.encode_utf16(&mut units));
+            }
+            value => {
+                use std::fmt::Write as _;
+
+                flush_utf16(&mut pending, &mut output);
+                let _ = write!(output, "\\X4\\{:08X}\\X0\\", u32::from(value));
             }
         }
     }
