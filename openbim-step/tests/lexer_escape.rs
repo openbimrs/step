@@ -84,7 +84,7 @@ fn lexer_rejects_keywords_with_a_leading_underscore() {
 
 #[test]
 fn line_delimiters_are_ignored_even_inside_tokens() {
-    let tokens = Lexer::new(b"/\n* c *\r/ #1\n2=ENT\rITY('it'\n's',1.\t0);")
+    let tokens = Lexer::new(b"\\N\\/\n* c *\r/ #1\n2=ENT\rITY('it'\n's',1.\t0,\"0A\\F\\B\");")
         .collect::<Result<Vec<_>, _>>()
         .expect("line delimiters are insignificant");
     assert!(matches!(&tokens[0].value, Token::Id(value) if value.as_ref() == b"12"));
@@ -97,6 +97,9 @@ fn line_delimiters_are_ignored_even_inside_tokens() {
     assert!(tokens
         .iter()
         .any(|token| matches!(&token.value, Token::Real(value) if value.as_ref() == b"1.0")));
+    assert!(tokens
+        .iter()
+        .any(|token| matches!(&token.value, Token::Binary(value) if value.as_ref() == b"0AB")));
 }
 
 #[test]

@@ -55,6 +55,26 @@ const fn is_ignored_control(byte: u8) -> bool {
     matches!(byte, b'\t' | b'\n' | b'\r' | 0x0c)
 }
 
+fn strip_print_directives(bytes: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
+    if !bytes
+        .windows(3)
+        .any(|window| matches!(window, b"\\N\\" | b"\\F\\"))
+    {
+        return bytes;
+    }
+    let mut stripped = Vec::with_capacity(bytes.len());
+    let mut position = 0;
+    while position < bytes.len() {
+        if matches!(bytes.get(position..position + 3), Some(b"\\N\\" | b"\\F\\")) {
+            position += 3;
+        } else {
+            stripped.push(bytes[position]);
+            position += 1;
+        }
+    }
+    Cow::Owned(stripped)
+}
+
 impl<'a> Lexer<'a> {
     /// Starts tokenizing `input`.
     #[must_use]
@@ -182,6 +202,13 @@ impl<'a> Lexer<'a> {
             {
                 self.position += 1;
             }
+            if let Some(end) = self
+                .match_ignoring_controls(self.position, b"\\N\\")
+                .or_else(|| self.match_ignoring_controls(self.position, b"\\F\\"))
+            {
+                self.position = end;
+                continue;
+            }
             if let Some(body_start) = self.match_ignoring_controls(self.position, b"/*") {
                 let start = self.position;
                 let mut cursor = body_start;
@@ -260,7 +287,7 @@ impl<'a> Lexer<'a> {
         let body_start = self.position;
         while let Some(&byte) = self.input.get(self.position) {
             if byte == b'"' {
-                let body = self.token_bytes(body_start, self.position);
+                let body = strip_print_directives(self.token_bytes(body_start, self.position));
                 self.position += 1;
                 if !is_valid_binary(body.as_ref()) {
                     return Err(StepError::syntax(

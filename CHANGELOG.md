@@ -17,7 +17,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Enforced mandatory Part 21 header records exactly once and in order.
 - Ignored line delimiters throughout lexical tokens while retaining original source spans.
 - Preserved malformed wide escapes instead of replacing or discarding their bytes.
-- Added `\\N\\`/`\\F\\` print-directive decoding and standards-compliant `\\X4\\` output for supplementary Unicode.
+- Added `\\N\\`/`\\F\\` print-directive handling between tokens and inside strings/binaries, plus standards-compliant `\\X4\\` output for supplementary Unicode.
 - Rejected user-defined keywords in dotted enumeration values.
 
 ## [0.1.0] - 2026-08-25
