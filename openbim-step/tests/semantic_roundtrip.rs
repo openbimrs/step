@@ -22,6 +22,7 @@ END-ISO-10303-21;
 fn detects_magic_with_bom_and_whitespace() {
     assert!(is_step_file(b"\xEF\xBB\xBF\r\n ISO-10303-21;"));
     assert!(is_step_file(b"ISO-10303-\n21;"));
+    assert!(is_step_file(b"\\N\\\r\n\\F\\ISO-10303-21;"));
     assert!(!is_step_file(b"ISO-10303-28;"));
 }
 
@@ -177,25 +178,30 @@ END-ISO-10303-21;
 }
 
 #[test]
+fn low_lines_in_keywords_and_enumerations_roundtrip() {
+    let input = br"ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('x'),'2;1');
+FILE_NAME('x','',(),(),'','','');
+FILE_SCHEMA(('X'));
+ENDSEC;
+DATA;
+#1=_ENTITY(!VENDOR_EXT($),._ENUM.);
+ENDSEC;
+END-ISO-10303-21;
+";
+    let exchange = parse(input).unwrap();
+    let rendered = write_to_string(&exchange).unwrap();
+    assert!(rendered.contains("_ENTITY(!VENDOR_EXT($),._ENUM.)"));
+    assert_eq!(parse(rendered.as_bytes()).unwrap(), exchange);
+}
+
+#[test]
 fn writer_rejects_syntax_bearing_record_names() {
     let mut exchange = parse(SAMPLE).unwrap();
     exchange.data.records[0] = DataRecord::simple(
         InstanceId::from(7_u64),
         "WIDGET);#999=INJECTED(".to_string(),
-        vec![Parameter::Null],
-    );
-    assert!(write_to_string(&exchange).is_err());
-
-    exchange.data.records[0] = DataRecord::simple(
-        InstanceId::from(7_u64),
-        "_BAD".to_string(),
-        vec![Parameter::Null],
-    );
-    assert!(write_to_string(&exchange).is_err());
-
-    exchange.data.records[0] = DataRecord::simple(
-        InstanceId::from(7_u64),
-        "!BAD_NAME".to_string(),
         vec![Parameter::Null],
     );
     assert!(write_to_string(&exchange).is_err());

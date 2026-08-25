@@ -66,7 +66,7 @@ fn lexer_accepts_user_defined_keywords() {
     assert!(matches!(&tokens[0].value, Token::Name(value) if value.as_ref() == b"!VENDOR"));
     assert!(matches!(&tokens[1].value, Token::Name(value) if value.as_ref() == b"!WRAPPED"));
 
-    for malformed in [b"!_BAD".as_slice(), b"!BAD_NAME"] {
+    for malformed in [b"!".as_slice(), b"!9BAD", b"!BAD-NAME"] {
         assert!(
             Lexer::new(malformed)
                 .collect::<Result<Vec<_>, _>>()
@@ -78,8 +78,38 @@ fn lexer_accepts_user_defined_keywords() {
 }
 
 #[test]
-fn lexer_rejects_keywords_with_a_leading_underscore() {
-    assert!(Lexer::new(b"_BAD").collect::<Result<Vec<_>, _>>().is_err());
+fn lexer_accepts_low_line_as_an_upper_character() {
+    let tokens = Lexer::new(b"_ENTITY !VENDOR_EXT ._ENUM.")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("low lines are valid UPPER characters in Part 21 keywords");
+    assert!(matches!(&tokens[0].value, Token::Name(value) if value.as_ref() == b"_ENTITY"));
+    assert!(matches!(&tokens[1].value, Token::Name(value) if value.as_ref() == b"!VENDOR_EXT"));
+    assert!(matches!(&tokens[2].value, Token::Keyword(value) if value.as_ref() == b"_ENUM"));
+}
+
+#[test]
+fn print_directives_are_ignored_inside_wide_text_and_quote_doubling() {
+    let tokens = Lexer::new(br"'\X2\0041\N\0042\X0\' 'a'\F\'b'")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("print directives are insignificant inside strings");
+    assert!(
+        matches!(&tokens[0].value, Token::Text(value) if value.as_ref() == br"\X2\00410042\X0\")
+    );
+    assert!(matches!(&tokens[1].value, Token::Text(value) if value.as_ref() == b"a''b"));
+    assert_eq!(
+        decode(match &tokens[0].value {
+            Token::Text(value) => value,
+            _ => unreachable!(),
+        }),
+        "AB"
+    );
+    assert_eq!(
+        decode(match &tokens[1].value {
+            Token::Text(value) => value,
+            _ => unreachable!(),
+        }),
+        "a'b"
+    );
 }
 
 #[test]

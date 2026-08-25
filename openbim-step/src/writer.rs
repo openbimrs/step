@@ -86,12 +86,12 @@ fn validate_header<S: AsRef<str>>(records: &[HeaderRecord<S>]) -> io::Result<()>
 }
 
 fn require_identifier(value: &str) -> io::Result<()> {
-    let (keyword, user_defined) = value
-        .strip_prefix('!')
-        .map_or((value, false), |keyword| (keyword, true));
+    let keyword = value.strip_prefix('!').unwrap_or(value);
     let mut bytes = keyword.bytes();
-    let valid = bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
-        && bytes.all(|byte| byte.is_ascii_alphanumeric() || !user_defined && byte == b'_');
+    let valid = bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
     if valid {
         Ok(())
     } else {

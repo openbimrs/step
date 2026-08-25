@@ -135,6 +135,33 @@ impl<'a> Lexer<'a> {
         Some(position)
     }
 
+    fn match_ignoring_text_controls(&self, start: usize, expected: &[u8]) -> Option<usize> {
+        let mut position = start;
+        for &expected_byte in expected {
+            loop {
+                while self
+                    .input
+                    .get(position)
+                    .is_some_and(|byte| is_ignored_control(*byte))
+                {
+                    position += 1;
+                }
+                let Some(end) = self
+                    .match_ignoring_controls(position, b"\\N\\")
+                    .or_else(|| self.match_ignoring_controls(position, b"\\F\\"))
+                else {
+                    break;
+                };
+                position = end;
+            }
+            if self.input.get(position) != Some(&expected_byte) {
+                return None;
+            }
+            position += 1;
+        }
+        Some(position)
+    }
+
     /// Produces the next spanned token.
     /// # Errors
     ///
@@ -167,7 +194,7 @@ impl<'a> Lexer<'a> {
             }
             b'.' => self.lex_keyword(start)?,
             b'0'..=b'9' | b'-' | b'+' => self.lex_number(start)?,
-            value if value.is_ascii_alphabetic() => self.lex_name(),
+            value if value.is_ascii_alphabetic() || value == b'_' => self.lex_name(),
             _ => {
                 self.position += 1;
                 return Err(StepError::syntax(
@@ -266,11 +293,11 @@ impl<'a> Lexer<'a> {
         let body_start = self.position;
         while let Some(&byte) = self.input.get(self.position) {
             if byte == b'\'' {
-                if let Some(end) = self.match_ignoring_controls(self.position, b"''") {
+                if let Some(end) = self.match_ignoring_text_controls(self.position, b"''") {
                     self.position = end;
                     continue;
                 }
-                let text = self.token_bytes(body_start, self.position);
+                let text = strip_print_directives(self.token_bytes(body_start, self.position));
                 self.position += 1;
                 return Ok(Token::Text(text));
             }
@@ -358,7 +385,7 @@ impl<'a> Lexer<'a> {
         if !self
             .input
             .get(body_start)
-            .is_some_and(u8::is_ascii_alphabetic)
+            .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
         {
             return Err(StepError::syntax(
                 Span::new(start, self.position),
@@ -367,13 +394,13 @@ impl<'a> Lexer<'a> {
         }
         self.position += 1;
         while let Some(&byte) = self.input.get(self.position) {
-            if is_ignored_control(byte) || byte.is_ascii_alphanumeric() {
+            if is_ignored_control(byte) || byte.is_ascii_alphanumeric() || byte == b'_' {
                 self.position += 1;
             } else {
                 break;
             }
         }
-        if matches!(self.input.get(self.position), Some(b'_' | b'-')) {
+        if matches!(self.input.get(self.position), Some(b'-')) {
             return Err(StepError::syntax(
                 Span::new(start, self.position + 1),
                 "invalid user-defined keyword",
