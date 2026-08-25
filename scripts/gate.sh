@@ -2,7 +2,9 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/mnt/backup/build-cache/openbim-step-target}"
+if [[ -z "${CARGO_TARGET_DIR:-}" && -d /mnt/backup/build-cache ]]; then
+  export CARGO_TARGET_DIR="/mnt/backup/build-cache/openbim-step-target"
+fi
 
 cargo fmt --all -- --check
 cargo build --workspace --all-targets --locked
