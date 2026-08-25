@@ -6,7 +6,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-08-25
+## [0.2.0] - 2026-08-25
+
+### Changed
+
+- Token byte payloads now use `Cow<[u8]>`, preserving allocation-free normal tokens while allowing line delimiters inside tokens to be removed correctly.
 
 ### Fixed
 
@@ -26,6 +30,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
 
-[Unreleased]: https://github.com/openbimrs/step/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/openbimrs/step/compare/v0.1.0...v0.1.1
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/openbimrs/step/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/openbimrs/step/releases/tag/v0.1.0
