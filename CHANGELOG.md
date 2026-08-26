@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-26
+
+### Added
+
+- `EntityDef::derived`: the attribute names declared in an entity's `DERIVE`
+  block, with `EntityDef::with_derived` and `EntityDef::is_derived`. A subtype
+  may redeclare an inherited explicit attribute as derived; Part 21 writes such
+  a slot as `*`, which is neither a value nor `$`. Without this a writer cannot
+  tell the three apart and cannot produce a conforming file. Names are reported
+  unqualified -- the `SELF\\Entity.` prefix names the declaring supertype, not
+  the attribute. Initialiser expressions are still not evaluated.
+
+### Changed
+
+- **Breaking:** `EntityDef` gained a public field, so struct-literal
+  construction must add `derived`. Builder-style construction is unaffected.
+
 ## [0.2.1] - 2026-08-25
 
 ### Fixed

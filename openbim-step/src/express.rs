@@ -1,11 +1,13 @@
 //! Explicitly structural, partial EXPRESS declaration extraction.
 //!
 //! This module extracts schema names, entity headers, explicit positional
-//! attributes, defined types, enumerations, and selects. It deliberately does
-//! **not** implement full EXPRESS semantics: expressions, rules, functions,
-//! procedures, constants, uniqueness constraints, inverse relationships,
-//! derived attributes, and complete type checking remain opaque. Consumers
-//! needing language validation must use a complete EXPRESS implementation.
+//! attributes, the names of derived attributes, defined types, enumerations,
+//! and selects. It deliberately does **not** implement full EXPRESS semantics:
+//! expressions, rules, functions, procedures, constants, uniqueness
+//! constraints, inverse relationships, and complete type checking remain
+//! opaque. Derived attributes are reported by *name only* — their initialiser
+//! expressions are not evaluated. Consumers needing language validation must
+//! use a complete EXPRESS implementation.
 
 /// A structurally parsed schema.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -70,6 +72,29 @@ pub struct EntityDef {
     /// Explicit attributes declared by this entity, excluding derived and
     /// inverse declarations.
     pub attributes: Vec<Attribute>,
+    /// Names of attributes this entity declares in its `DERIVE` block.
+    ///
+    /// A subtype may redeclare an inherited explicit attribute as derived:
+    ///
+    /// ```text
+    /// DERIVE
+    ///   SELF\IfcGeometricRepresentationContext.Precision : IfcReal
+    ///       := NVL(ParentContext.Precision, 1.E-5);
+    /// ```
+    ///
+    /// The redeclaration keeps the attribute's inherited *position* but
+    /// removes it from what an instance may state: Part 21 writes such a slot
+    /// as `*`, not as a value and not as `$`. A consumer that does not know an
+    /// attribute is derived cannot tell those apart, so this list is the
+    /// minimum needed to write a conforming file.
+    ///
+    /// Names are stored unqualified — the `SELF\Entity.` prefix is stripped —
+    /// because that is how they match the inherited attribute they redeclare.
+    /// Entries are in declaration order. Derived attributes that are *new*
+    /// rather than redeclarations appear here too; they occupy no positional
+    /// slot, so consumers resolving slots should match against inherited
+    /// attribute names rather than assuming every entry is positional.
+    pub derived: Vec<String>,
 }
 
 impl EntityDef {
@@ -81,6 +106,7 @@ impl EntityDef {
             supertype: None,
             abstract_: false,
             attributes: Vec::new(),
+            derived: Vec::new(),
         }
     }
 
@@ -96,6 +122,25 @@ impl EntityDef {
     pub fn with_attribute(mut self, attribute: Attribute) -> Self {
         self.attributes.push(attribute);
         self
+    }
+
+    /// Declares an attribute name as derived, as a `DERIVE` block would.
+    #[must_use]
+    pub fn with_derived(mut self, name: impl Into<String>) -> Self {
+        self.derived.push(name.into());
+        self
+    }
+
+    /// Whether `name` is declared derived by this entity.
+    ///
+    /// Comparison is ASCII case-insensitive: EXPRESS identifiers are
+    /// case-sensitive in principle, but schema text and Part 21 keywords
+    /// disagree on case often enough that matching exactly is a foot-gun.
+    #[must_use]
+    pub fn is_derived(&self, name: &str) -> bool {
+        self.derived
+            .iter()
+            .any(|declared| declared.eq_ignore_ascii_case(name))
     }
 }
 
@@ -274,13 +319,62 @@ fn parse_entity(block: &str) -> Option<EntityDef> {
         .split(';')
         .filter_map(parse_attribute)
         .collect();
+    let derived = parse_derive_block(block, &upper, header_end + 1);
 
     Some(EntityDef {
         name,
         supertype,
         abstract_,
         attributes,
+        derived,
     })
+}
+
+/// Collect the attribute names declared in an entity's `DERIVE` block.
+///
+/// The block runs from `DERIVE` to whichever of `INVERSE`/`UNIQUE`/`WHERE`/
+/// `END_ENTITY` comes first. Each statement looks like
+/// `SELF\Super.Name : Type := expression;` for a redeclaration, or
+/// `Name : Type := expression;` for a new derived attribute.
+///
+/// Splitting on `;` is safe here because the initialiser expressions in a
+/// DERIVE block are EXPRESS expressions, which do not contain semicolons.
+fn parse_derive_block(block: &str, upper: &str, from: usize) -> Vec<String> {
+    let Some(start) = find_keyword(upper, "DERIVE", from) else {
+        return Vec::new();
+    };
+    let start = start + "DERIVE".len();
+    let end = ["INVERSE", "UNIQUE", "WHERE", "END_ENTITY"]
+        .into_iter()
+        .filter_map(|keyword| find_keyword(upper, keyword, start))
+        .min()
+        .unwrap_or(block.len());
+    if end <= start {
+        return Vec::new();
+    }
+
+    block[start..end]
+        .split(';')
+        .filter_map(derived_attribute_name)
+        .collect()
+}
+
+/// Extract the attribute name from one `DERIVE` statement.
+///
+/// `SELF\IfcGeometricRepresentationContext.Precision : IfcReal := ...` yields
+/// `Precision`: the qualifying `SELF\Entity.` prefix names the supertype the
+/// attribute is inherited from, not the attribute.
+fn derived_attribute_name(statement: &str) -> Option<String> {
+    let (target, _) = statement.split_once(':')?;
+    let target = target.trim();
+    // A redeclaration qualifies the name with the declaring supertype; the
+    // attribute itself is the final dotted segment.
+    let name = target.rsplit('.').next()?.trim();
+    let name = name.rsplit('\\').next()?.trim();
+    if name.is_empty() || !name.bytes().all(is_identifier_byte) {
+        return None;
+    }
+    Some(name.to_owned())
 }
 
 fn clause_name(header: &str, upper: &str, clause: &str) -> Option<String> {

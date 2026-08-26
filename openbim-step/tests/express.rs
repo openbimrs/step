@@ -68,6 +68,7 @@ fn structural_partial_express_parser_extracts_supported_declarations() {
                 optional: true,
                 aggregate: false
             }],
+            derived: Vec::new(),
         }
     );
     let item = &entities[1];
@@ -93,5 +94,82 @@ fn structural_partial_express_parser_extracts_supported_declarations() {
     assert_eq!(
         types[2].kind,
         TypeKind::Select(vec!["Distance".into(), "Shade".into()])
+    );
+}
+
+/// A subtype may redeclare an inherited attribute as DERIVED. Part 21 writes
+/// such a slot as `*`, which is neither a value nor `$`, so a writer that does
+/// not know the attribute is derived cannot produce a conforming file.
+#[test]
+fn derive_blocks_report_redeclared_attribute_names() {
+    let source = "\
+SCHEMA test;
+ENTITY parent;
+  Precision : REAL;
+  Dimension : INTEGER;
+END_ENTITY;
+ENTITY child
+ SUBTYPE OF (parent);
+  ParentRef : parent;
+ DERIVE
+  SELF\\parent.Precision : REAL := NVL(ParentRef.Precision, 1.E-5);
+  SELF\\parent.Dimension : INTEGER := ParentRef.Dimension;
+ WHERE
+  NoSub : TRUE;
+END_ENTITY;
+END_SCHEMA;
+";
+    let schema = parse(source);
+    let child = schema
+        .entities
+        .iter()
+        .find(|entity| entity.name == "child")
+        .expect("child entity");
+
+    assert_eq!(
+        child.derived,
+        vec!["Precision".to_owned(), "Dimension".to_owned()],
+        "the SELF\\Entity. prefix names the supertype, not the attribute"
+    );
+    assert!(
+        child.is_derived("precision"),
+        "matching is case-insensitive"
+    );
+    assert!(
+        !child.is_derived("ParentRef"),
+        "explicit attributes are not derived"
+    );
+
+    // The WHERE clause must not leak into the derived list.
+    assert!(!child.is_derived("NoSub"));
+
+    // An entity without a DERIVE block reports none.
+    let parent = schema
+        .entities
+        .iter()
+        .find(|entity| entity.name == "parent")
+        .expect("parent entity");
+    assert!(parent.derived.is_empty());
+}
+
+/// A derived attribute that is not a redeclaration has no qualifying prefix.
+#[test]
+fn unqualified_derived_attributes_are_reported() {
+    let source = "\
+SCHEMA test;
+ENTITY thing;
+  Length : REAL;
+ DERIVE
+  Area : REAL := Length * Length;
+END_ENTITY;
+END_SCHEMA;
+";
+    let schema = parse(source);
+    let thing = &schema.entities[0];
+    assert_eq!(thing.derived, vec!["Area".to_owned()]);
+    assert_eq!(
+        thing.attributes.len(),
+        1,
+        "a derived attribute is not an explicit positional attribute"
     );
 }
