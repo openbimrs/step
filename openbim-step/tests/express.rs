@@ -173,3 +173,65 @@ END_SCHEMA;
         "a derived attribute is not an explicit positional attribute"
     );
 }
+
+/// The DERIVE block must end where the next clause begins.
+///
+/// A single WHERE rule cannot prove this: its statement still carries the
+/// `WHERE` keyword, so it fails the identifier check by accident. From the
+/// second rule onward the keyword is gone and a bad boundary silently reports
+/// rule labels as derived attributes. Real schemas routinely have several.
+#[test]
+fn where_rule_labels_are_not_reported_as_derived() {
+    let source = "\
+SCHEMA test;
+ENTITY child;
+  ParentRef : INTEGER;
+ DERIVE
+  SELF\\parent.Precision : REAL := 1.0;
+ WHERE
+  FirstRule : TRUE;
+  SecondRule : TRUE;
+  ThirdRule : TRUE;
+END_ENTITY;
+END_SCHEMA;
+";
+    let schema = parse(source);
+    let child = &schema.entities[0];
+    assert_eq!(
+        child.derived,
+        vec!["Precision".to_owned()],
+        "only the DERIVE statement, not the WHERE rule labels"
+    );
+    for rule in ["FirstRule", "SecondRule", "ThirdRule"] {
+        assert!(
+            !child.is_derived(rule),
+            "{rule} is a constraint, not an attribute"
+        );
+    }
+}
+
+/// The same boundary, for the other clauses that can follow DERIVE.
+#[test]
+fn inverse_and_unique_clauses_do_not_leak_into_derived() {
+    let source = "\
+SCHEMA test;
+ENTITY child;
+  Ref : INTEGER;
+ DERIVE
+  Computed : REAL := 1.0;
+ INVERSE
+  FirstBack : SET OF other FOR Ref;
+  SecondBack : SET OF other FOR Ref;
+ UNIQUE
+  FirstKey : Ref;
+  SecondKey : Ref;
+END_ENTITY;
+END_SCHEMA;
+";
+    let schema = parse(source);
+    let child = &schema.entities[0];
+    assert_eq!(child.derived, vec!["Computed".to_owned()]);
+    for name in ["FirstBack", "SecondBack", "FirstKey", "SecondKey"] {
+        assert!(!child.is_derived(name), "{name} must not be derived");
+    }
+}
