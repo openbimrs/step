@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-27
+
+### Fixed
+
+- Recovery no longer reads record syntax out of a binary literal. `"..."` was
+  the one literal kind the resynchronization scan did not track, so a `;`
+  inside a blob looked like a record boundary and the bytes after it were
+  parsed as real records -- fabricating entities that were never in the source
+  and were covered by no diagnostic. An apostrophe inside a blob also inverted
+  the scanner state and swallowed the rest of the file. Strings, binaries, and
+  comments are now all tracked.
+
 ## [0.3.1] - 2026-08-27
 
 ### Fixed

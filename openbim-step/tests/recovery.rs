@@ -232,3 +232,58 @@ fn options_are_composable_and_strict_by_default() {
     );
     assert_eq!(OnMalformed::default(), OnMalformed::Abort);
 }
+
+#[test]
+fn recovery_does_not_read_record_syntax_out_of_a_binary_literal() {
+    // A binary literal is the third literal kind, alongside strings and
+    // comments. If its payload is scanned as code, a `;` inside the blob looks
+    // like a record boundary and the bytes after it are parsed as real records
+    // -- fabricating entities that never existed in the source, with no
+    // diagnostic covering them. That is worse than the silent recovery this
+    // API exists to beat.
+    let input = exchange(
+        "#1= IFCWALL(@);\n\
+         #2= IFCPIXELTEXTURE(1,1,8,(\"00AA;#3= IFCGHOST('never in file');BB\"));\n\
+         #4= IFCDOOR('real');",
+    );
+    let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).expect("recovery");
+
+    assert!(
+        !ids(&outcome.exchange).contains(&"3".to_string()),
+        "recovery fabricated #3 out of binary-literal payload: {:?}",
+        ids(&outcome.exchange)
+    );
+    assert_eq!(ids(&outcome.exchange), ["4"]);
+
+    // Everything not kept must be covered by a diagnostic.
+    for diagnostic in &outcome.diagnostics {
+        assert!(diagnostic.span().end <= input.len());
+        assert!(diagnostic.span().start <= diagnostic.span().end);
+    }
+}
+
+#[test]
+fn an_apostrophe_inside_a_binary_literal_does_not_swallow_the_file() {
+    // `'` has no meaning inside a binary literal. Treating it as a string
+    // opener inverts the scanner's state and eats the rest of the input.
+    let input = exchange(
+        "#1= IFCWALL(@);\n\
+         #2= IFCPIXELTEXTURE(1,1,8,(\"00A'B\"));\n\
+         #3= IFCDOOR('real');",
+    );
+    let outcome = parse_with(input.as_bytes(), ParseOptions::lenient())
+        .expect("an apostrophe inside a binary literal is ordinary payload");
+    assert_eq!(ids(&outcome.exchange), ["3"]);
+}
+
+#[test]
+fn endsec_inside_a_binary_literal_is_not_a_section_end() {
+    let input = exchange(
+        "#1= IFCWALL(@);\n\
+         #2= IFCPIXELTEXTURE(1,1,8,(\"0ENDSEC\"));\n\
+         #3= IFCDOOR('real');",
+    );
+    let outcome = parse_with(input.as_bytes(), ParseOptions::lenient())
+        .expect("ENDSEC inside a binary literal is payload, not structure");
+    assert_eq!(ids(&outcome.exchange), ["3"]);
+}

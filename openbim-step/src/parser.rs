@@ -375,40 +375,63 @@ impl<'a> Parser<'a> {
     /// Finds the next byte offset at which parsing can safely restart.
     ///
     /// Scans raw bytes rather than tokens because the tokenizer is what
-    /// failed. Quoted strings and comments are tracked so a `;` or `ENDSEC`
-    /// inside a literal is not mistaken for a record boundary. A section
-    /// terminator stops the scan *before* it is consumed, so recovery can
-    /// never swallow the end of `DATA`.
+    /// failed. All three literal kinds -- quoted strings, binary literals, and
+    /// comments -- are tracked, so a `;` or `ENDSEC` inside a literal is not
+    /// mistaken for a record boundary. Scanning a literal's payload as code
+    /// would let recovery fabricate records that were never in the source.
+    /// A section terminator stops the scan *before* it is consumed, so
+    /// recovery can never swallow the end of `DATA`.
     fn resync_from(&self, from: usize) -> usize {
+        // Which literal the scanner is currently inside. STEP has three, and
+        // all of them can contain bytes that look like record syntax.
+        enum Literal {
+            None,
+            // `'...'`, where `''` is an escaped apostrophe rather than a close.
+            Text,
+            // `"...."`, with no doubling rule: the first `"` closes it.
+            Binary,
+        }
+
         let mut position = from.min(self.input.len());
-        let mut in_string = false;
+        let mut literal = Literal::None;
         while position < self.input.len() {
             let byte = self.input[position];
-            if in_string {
-                if byte == b'\'' {
-                    if self.input.get(position + 1) == Some(&b'\'') {
-                        position += 2;
-                        continue;
+            match literal {
+                Literal::Text => {
+                    if byte == b'\'' {
+                        if self.input.get(position + 1) == Some(&b'\'') {
+                            position += 2;
+                            continue;
+                        }
+                        literal = Literal::None;
                     }
-                    in_string = false;
-                }
-                position += 1;
-                continue;
-            }
-            match byte {
-                b'\'' => {
-                    in_string = true;
                     position += 1;
                 }
-                b'/' if self.input.get(position + 1) == Some(&b'*') => {
-                    position = self.input[position + 2..]
-                        .windows(2)
-                        .position(|window| window == b"*/")
-                        .map_or(self.input.len(), |offset| position + 2 + offset + 2);
+                Literal::Binary => {
+                    if byte == b'"' {
+                        literal = Literal::None;
+                    }
+                    position += 1;
                 }
-                b';' => return position + 1,
-                _ if self.section_end_at(position) => return position,
-                _ => position += 1,
+                Literal::None => match byte {
+                    b'\'' => {
+                        literal = Literal::Text;
+                        position += 1;
+                    }
+                    b'"' => {
+                        literal = Literal::Binary;
+                        position += 1;
+                    }
+                    b'/' if self.input.get(position + 1) == Some(&b'*') => {
+                        position = self.input[position + 2..]
+                            .windows(2)
+                            .position(|window| window == b"*/")
+                            .map_or(self.input.len(), |offset| position + 2 + offset + 2);
+                    }
+                    b';' => return position + 1,
+                    _ if self.section_end_at(position) => return position,
+                    _ => position += 1,
+                },
             }
         }
         self.input.len()
