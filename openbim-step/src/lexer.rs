@@ -118,6 +118,16 @@ impl<'a> Lexer<'a> {
         self.position
     }
 
+    /// Restarts tokenization at `position`.
+    ///
+    /// Only bounded error recovery uses this: after a lexical failure the
+    /// parser must step past the damaged bytes to resynchronize. Callers are
+    /// responsible for advancing monotonically, otherwise recovery can loop.
+    pub(crate) fn resume_at(&mut self, position: usize) {
+        self.position = position.min(self.input.len());
+        self.finished = false;
+    }
+
     fn skip_ignored_controls(&mut self) {
         while self
             .input

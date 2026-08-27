@@ -6,10 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-08-26
+## [0.3.0] - 2026-08-27
 
 ### Added
 
+- Opt-in malformed-record recovery: `ParseOptions`, `OnMalformed`,
+  `parse_with`, and `parse_events_with`. Under `OnMalformed::Skip` an
+  unparsable data record is reported as a `Diagnostic` and the parser
+  resynchronizes on the next record, so a consumer can load a damaged export
+  and still show exactly what was dropped. Parsing stays strict by default,
+  and header structure, section structure, and the physical-file marker remain
+  fatal under every policy.
+- `ParseOutcome`, carrying the parsed exchange together with the non-fatal
+  `Diagnostic` list in source order.
 - `EntityDef::derived`: the attribute names declared in an entity's `DERIVE`
   block, with `EntityDef::with_derived` and `EntityDef::is_derived`. A subtype
   may redeclare an inherited explicit attribute as derived; Part 21 writes such
