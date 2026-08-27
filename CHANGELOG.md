@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-27
+
+### Fixed
+
+- Recovery no longer consumes `ENDSEC` when the failing record is the last in
+  `DATA`. The diagnostic span for a bare instance id covers the following
+  token, so resynchronizing past the span swallowed the section terminator and
+  failed the whole file at `END-ISO-10303-21`. Recovery now rescans from just
+  after the damaged record's first byte.
+
 ## [0.3.0] - 2026-08-27
 
 ### Added

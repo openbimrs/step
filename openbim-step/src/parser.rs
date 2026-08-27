@@ -357,12 +357,11 @@ impl<'a> Parser<'a> {
             return Err(error);
         }
         let start = record_start.unwrap_or_else(|| error.span().start);
-        let failure = error
-            .span()
-            .end
-            .max(self.lexer.offset())
-            .max(start.saturating_add(1));
-        let resume = self.resync_from(failure);
+        // Resynchronize from just past the record's first byte, NOT from the
+        // end of the error span. A diagnostic can legitimately span the token
+        // that follows the damage -- including `ENDSEC` -- and resuming past
+        // it would swallow the section terminator.
+        let resume = self.resync_from(start.saturating_add(1));
         self.lookahead = None;
         self.lexer.resume_at(resume);
         self.last_end = resume;

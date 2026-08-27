@@ -199,6 +199,22 @@ fn lexical_damage_outside_the_data_section_stays_fatal() {
 }
 
 #[test]
+fn a_bare_instance_id_before_endsec_does_not_swallow_the_section() {
+    // The error span for `#2` covers the ENDSEC token that follows it.
+    // Resynchronizing past the span would consume the section terminator and
+    // fail the whole file at END-ISO-10303-21.
+    let input = exchange("#1= IFCPERSON($,$,'a',$,$,$,$,$);\n#2");
+    let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).expect("recovery");
+
+    assert_eq!(ids(&outcome.exchange), ["1"]);
+    assert_eq!(outcome.diagnostics.len(), 1);
+    let dropped = String::from_utf8_lossy(
+        &input.as_bytes()[outcome.diagnostics[0].span().start..outcome.diagnostics[0].span().end],
+    );
+    assert!(!dropped.contains("ENDSEC"), "{dropped}");
+}
+
+#[test]
 fn a_data_section_of_only_damage_yields_an_empty_model_and_diagnostics() {
     let input = exchange("#1 IFCPERSON($,$,'a',$,$,$,$,$);\n#2 IFCORGANIZATION($,'o',$,$,$);");
     let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).expect("recovery");
