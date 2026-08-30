@@ -235,3 +235,72 @@ END_SCHEMA;
         assert!(!child.is_derived(name), "{name} must not be derived");
     }
 }
+
+/// `UNIQUE` inside an aggregate declaration does not end the attribute list.
+///
+/// EXPRESS reuses block keywords as declaration modifiers: `LIST [1:?] OF
+/// UNIQUE X` is an attribute, not a UNIQUE block. Ending the body at the first
+/// occurrence truncated the entity, and every attribute after it vanished.
+/// `IfcTypeProduct` lost `RepresentationMaps` and `Tag` this way, which made
+/// every IFC product type impossible to author.
+#[test]
+fn a_unique_aggregate_does_not_truncate_the_attribute_list() {
+    let source = "\
+ENTITY Holder
+ SUPERTYPE OF (ONEOF
+    (SubA
+    ,SubB))
+ SUBTYPE OF (Base);
+\tMaps : OPTIONAL LIST [1:?] OF UNIQUE Target;
+\tTag : OPTIONAL Label;
+ INVERSE
+\tUsedBy : SET [0:?] OF Other FOR Thing;
+ WHERE
+\tRule : EXISTS(Tag);
+END_ENTITY;
+";
+    let schema = parse(source);
+    let holder = schema
+        .entities
+        .iter()
+        .find(|entity| entity.name == "Holder")
+        .expect("Holder parsed");
+
+    let names: Vec<&str> = holder
+        .attributes
+        .iter()
+        .map(|attribute| attribute.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["Maps", "Tag"],
+        "the attribute after the inline UNIQUE must survive"
+    );
+    assert_eq!(holder.supertype.as_deref(), Some("Base"));
+}
+
+/// A real `UNIQUE` block still ends the attribute list.
+///
+/// The fix must not swing the other way and swallow genuine blocks.
+#[test]
+fn a_statement_level_unique_block_still_ends_the_attributes() {
+    let source = "\
+ENTITY Thing;
+\tName : Label;
+ UNIQUE
+\tOnlyOne : Name;
+END_ENTITY;
+";
+    let schema = parse(source);
+    let thing = schema
+        .entities
+        .iter()
+        .find(|entity| entity.name == "Thing")
+        .expect("Thing parsed");
+    let names: Vec<&str> = thing
+        .attributes
+        .iter()
+        .map(|attribute| attribute.name.as_str())
+        .collect();
+    assert_eq!(names, ["Name"], "the UNIQUE block is not an attribute");
+}

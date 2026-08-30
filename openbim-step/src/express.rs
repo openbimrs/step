@@ -292,6 +292,34 @@ fn find_keyword(haystack: &str, needle: &str, from: usize) -> Option<usize> {
     None
 }
 
+/// Find a block keyword (`DERIVE`, `INVERSE`, `UNIQUE`, `WHERE`) where it
+/// actually opens a block, rather than where it merely appears as a word.
+///
+/// EXPRESS reuses these words inside declarations: `LIST [1:?] OF UNIQUE
+/// IfcRepresentationMap` on `IfcTypeProduct` contains `UNIQUE` in the middle of
+/// an attribute, and treating that as the start of a UNIQUE block truncates the
+/// entity's attribute list. Both `IfcTypeProduct.RepresentationMaps` and `.Tag`
+/// were lost that way, which silently made every product type unauthorable.
+///
+/// A block keyword only opens a block at statement level: the first token after
+/// the previous statement's `;` (or after the entity header). Anything else is
+/// part of a declaration.
+fn find_block_keyword(source: &str, upper: &str, needle: &str, from: usize) -> Option<usize> {
+    let mut cursor = from;
+    while let Some(position) = find_keyword(upper, needle, cursor) {
+        let preceding = source[from..position]
+            .rfind(';')
+            .map_or(&source[from..position], |offset| {
+                &source[from + offset + 1..position]
+            });
+        if preceding.trim().is_empty() {
+            return Some(position);
+        }
+        cursor = position + needle.len();
+    }
+    None
+}
+
 fn is_identifier_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
@@ -312,7 +340,7 @@ fn parse_entity(block: &str) -> Option<EntityDef> {
 
     let body_end = ["DERIVE", "INVERSE", "UNIQUE", "WHERE", "END_ENTITY"]
         .into_iter()
-        .filter_map(|keyword| find_keyword(&upper, keyword, header_end + 1))
+        .filter_map(|keyword| find_block_keyword(block, &upper, keyword, header_end + 1))
         .min()
         .unwrap_or(block.len());
     let attributes = block[header_end + 1..body_end]

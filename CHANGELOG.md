@@ -4,6 +4,24 @@ All notable changes to this project are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-30
+
+### Added
+- `schema::SchemaGraph`: the parsed schema as a queryable graph. Supertype
+  chains, Part 21 positional attribute order (inherited slots first),
+  case-insensitive entity/type lookup, and defined-type alias resolution.
+  Previously each application-schema crate reimplemented this; none of it is
+  specific to any one schema.
+
+### Fixed
+- A block keyword inside an attribute declaration no longer truncates the
+  attribute list. `LIST [1:?] OF UNIQUE X` contains `UNIQUE`, which was read
+  as the start of a `UNIQUE` block, silently dropping every attribute after
+  it. Block keywords are now recognized only at statement level. In IFC4 this
+  affected 11 declarations, including `IfcTypeProduct.RepresentationMaps` and
+  `.Tag` -- and therefore the positional slots of all 124 entities inheriting
+  from it.
+
 ## [Unreleased]
 
 ## [0.3.2] - 2026-08-27
