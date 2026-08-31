@@ -22,4 +22,4 @@ validation remain future work. IFC-specific graph mapping and policy live in
 bash scripts/gate.sh
 ```
 
-MIT licensed.
+AGPL-3.0-or-later licensed.
