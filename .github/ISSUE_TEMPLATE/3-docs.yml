@@ -1,0 +1,51 @@
+name: 📖 Documentation problem
+description: Documentation is missing, wrong, unclear, or overclaims current behavior.
+title: "[docs]: "
+type: Task
+labels: ["needs-triage"]
+assignees: ["GeneralPawz"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 📖 Documentation
+
+        OpenBIM.rs separates ambition from implemented status. Please flag
+        capability claims that do not match executable behavior.
+
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: Page URL, rustdoc item, or repository path.
+      placeholder: docs/capabilities.md or a direct URL
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong
+      description: Quote the passage and explain what is missing, unclear, or false.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - "Missing—something is undocumented"
+        - "Wrong—contradicts executable behavior"
+        - "Overclaims—asserts an unavailable capability"
+        - "Unclear—correct but hard to follow"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked the current default branch and current documentation site.
+          required: true

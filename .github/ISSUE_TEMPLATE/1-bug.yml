@@ -1,0 +1,82 @@
+name: 🐛 Bug report
+description: Something behaves incorrectly, or does not build as documented.
+title: "[bug]: "
+type: Bug
+labels: ["needs-triage"]
+assignees: ["GeneralPawz"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🐛 Reporting a bug
+
+        A bug means documented or obvious behavior is wrong. If the library
+        simply cannot do something yet, start a feature discussion instead.
+        Pin the exact commit and include executable evidence.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences. What is broken?
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Minimal reproduction and the exact commit tested. Paste real output.
+      render: shell
+      placeholder: |
+        Repo @ commit <sha>
+        $ cargo test -p openbim-...
+        actual output:
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+      description: What should have happened instead, and what establishes that expectation?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the repository is affected?
+      options:
+        - model
+        - codecs
+        - validation
+        - geometry
+        - domain
+        - integration
+        - architecture
+        - docs
+        - release
+        - "not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: effort
+    attributes:
+      label: Effort
+      description: Low is self-contained; Medium crosses several files; High changes public contracts or needs design work.
+      options: [Low, Medium, High]
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I tested against the current default branch, not only a release.
+          required: true
+        - label: I searched existing issues and discussions for a duplicate.
+          required: true

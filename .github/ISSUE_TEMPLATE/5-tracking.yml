@@ -1,0 +1,61 @@
+name: 🧭 Tracking issue (maintainers)
+description: An umbrella capability spanning several independently landable issues.
+title: "[tracking]: "
+type: Feature
+labels: ["capability", "tracking"]
+assignees: ["GeneralPawz"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🧭 Tracking issue
+
+        Use this when a capability is too large for one pull request. This is
+        the parent; concrete pieces become GitHub sub-issues so progress remains live.
+
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: The capability and what becomes possible once it exists.
+    validations:
+      required: true
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: Planned decomposition
+      description: Describe intended pieces; create sub-issues only when each becomes concrete.
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done for the whole capability
+      description: What must be observably true before this parent closes?
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        Tracking issues hold sub-issues, not task checklists. Keep checkboxes
+        only for non-work conditions such as an ADR or upstream release.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - model
+        - codecs
+        - validation
+        - geometry
+        - domain
+        - integration
+        - architecture
+        - docs
+        - release
+    validations:
+      required: true

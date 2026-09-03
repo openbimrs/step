@@ -1,0 +1,64 @@
+name: 🩹 Papercut / ergonomics
+description: Existing behavior is correct but awkward to use—naming, visibility, or a missing helper.
+title: "[papercut]: "
+type: Bug
+labels: ["papercut", "needs-triage"]
+assignees: ["GeneralPawz"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🩹 Papercut, not an optimization
+
+        A papercut costs keystrokes. An optimization costs milliseconds.
+        Papercuts are issues because their fixes should be small and obvious;
+        changes needing design discussion belong in Discussions.
+
+  - type: textarea
+    id: friction
+    attributes:
+      label: What is awkward
+      description: What did you have to work around, and how? Include real code when possible.
+    validations:
+      required: true
+
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suggested fix
+      description: Concrete rename, helper, conversion, or visibility change.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - model
+        - codecs
+        - validation
+        - geometry
+        - domain
+        - integration
+        - architecture
+        - docs
+        - release
+        - "not sure"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: effort
+    attributes:
+      label: Effort
+      description: Papercuts are normally Low; use Medium or High only when the fix cascades.
+      options: [Low, Medium, High]
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: This is ergonomics, not missing behavior or measured performance.
+          required: true

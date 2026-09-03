@@ -1,0 +1,123 @@
+name: Issue triage
+
+# Issue forms set type, assignee, and labels. This Action backstops API-created,
+# transferred, reopened, and discussion-converted issues without overriding
+# explicit maintainer choices.
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Classify and seed native metadata
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          NUM: ${{ github.event.issue.number }}
+          BODY: ${{ github.event.issue.body }}
+          TITLE: ${{ github.event.issue.title }}
+        run: |
+          set -euo pipefail
+
+          issue=$(gh api "repos/$REPO/issues/$NUM")
+          type=$(printf '%s' "$issue" | jq -r '.type.name // empty')
+          labels=$(printf '%s' "$issue" | jq -r '[.labels[].name] | join(" ")')
+          assignees=$(printf '%s' "$issue" | jq -r '.assignees | length')
+
+          # Discussion conversion bypasses issue forms. Resolve its category from
+          # the marker GitHub prepends, then map the verified category vocabulary.
+          dnum=$(printf '%s' "${BODY:-}" \
+            | grep -oE 'Discussed in https://github\.com/[^/]+/[^/]+/discussions/[0-9]+' \
+            | grep -oE '[0-9]+$' | head -1 || true)
+          category=''
+          if [ -n "$dnum" ]; then
+            owner="${REPO%%/*}"; name="${REPO##*/}"
+            category=$(gh api graphql -f query='
+              query($o:String!,$n:String!,$d:Int!){
+                repository(owner:$o,name:$n){discussion(number:$d){category{name}}}
+              }' -f o="$owner" -f n="$name" -F d="$dnum" \
+              --jq '.data.repository.discussion.category.name')
+          fi
+
+          if [ -z "$type" ]; then
+            case "$category:$TITLE:$labels" in
+              Ideas:\[optimization\]*:*) inferred=Optimization ;;
+              Ideas:*:*)                   inferred=Feature ;;
+              Q\&A:*:*)                    inferred=Task ;;
+              *:*:*papercut*)              inferred=Bug ;;
+              *:*:*capability*)            inferred=Feature ;;
+              *)                           inferred=Task ;;
+            esac
+            gh api -X PATCH "repos/$REPO/issues/$NUM" -f "type=$inferred" >/dev/null
+            echo "set type=$inferred"
+          else
+            echo "type already set: $type"
+          fi
+
+          if [ "$assignees" = 0 ]; then
+            gh issue edit "$NUM" --repo "$REPO" --add-assignee GeneralPawz
+          fi
+          case " $labels " in
+            *' needs-triage '*) ;;
+            *) gh issue edit "$NUM" --repo "$REPO" --add-label needs-triage ;;
+          esac
+
+          # GitHub replaces the complete issue_field_values array on PATCH.
+          # Carry every existing value through before adding missing defaults.
+          issue=$(gh api "repos/$REPO/issues/$NUM")
+          have=$(printf '%s' "$issue" | jq -r '[.issue_field_values[]?.issue_field_name] | join(" ")')
+          type=$(printf '%s' "$issue" | jq -r '.type.name // empty')
+          updates='[]'
+
+          case "$have" in
+            *Priority*) ;;
+            *) case "$type" in Bug) priority=High ;; *) priority=Medium ;; esac
+               updates=$(printf '%s' "$updates" | jq --argjson f 46034215 --arg v "$priority" '. + [{field_id:$f,value:$v}]') ;;
+          esac
+
+          case "$have" in
+            *Effort*) ;;
+            *) effort=$(printf '%s' "${BODY:-}" | awk '/^### Effort\r?$/{getline; getline; gsub(/\r/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}')
+               case "$effort" in Low|Medium|High) ;; *) effort=Medium ;; esac
+               updates=$(printf '%s' "$updates" | jq --argjson f 46034218 --arg v "$effort" '. + [{field_id:$f,value:$v}]') ;;
+          esac
+
+          case "$have" in
+            *Area*) ;;
+            *) area=$(printf '%s' "${BODY:-}" | awk '/^### Area\r?$/{getline; getline; gsub(/\r/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}')
+               case "$TITLE" in '[docs]: '*) area=docs ;; esac
+               case "$area" in
+                 model|codecs|validation|geometry|domain|integration|architecture|docs|release)
+                   updates=$(printf '%s' "$updates" | jq --argjson f 46433563 --arg v "$area" '. + [{field_id:$f,value:$v}]') ;;
+                 *) echo "Area remains untriaged (${area:-no form answer})" ;;
+               esac ;;
+          esac
+
+          if [ "$(printf '%s' "$updates" | jq 'length')" != 0 ]; then
+            current=$(printf '%s' "$issue" | jq '[.issue_field_values[]? |
+              {field_id:.issue_field_id,
+               value:(.single_select_option.name // .value)} |
+              select(.value != null)]')
+            jq -n --argjson current "$current" --argjson updates "$updates" \
+              '{issue_field_values:($current + $updates)}' > /tmp/issue-fields.json
+            gh api "repos/$REPO/issues/$NUM" -X PATCH --input /tmp/issue-fields.json \
+              --jq '[.issue_field_values[]|"\(.issue_field_name)=\(.single_select_option.name // .value)"]|join(" ")'
+          else
+            echo 'native issue fields already populated'
+          fi
+
+          # A papercut is friction in behavior that exists, hence a Bug.
+          issue=$(gh api "repos/$REPO/issues/$NUM")
+          type=$(printf '%s' "$issue" | jq -r '.type.name // empty')
+          labels=$(printf '%s' "$issue" | jq -r '[.labels[].name] | join(" ")')
+          case "$labels:$type" in
+            *papercut*:Feature)
+              gh issue comment "$NUM" --repo "$REPO" --body \
+                '🤖 This is labelled `papercut` but typed **Feature**. Existing ergonomic friction is a Bug; genuinely missing behavior belongs in an Ideas discussion.' ;;
+            *) echo 'type and labels are consistent' ;;
+          esac

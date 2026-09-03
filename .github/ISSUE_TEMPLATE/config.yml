@@ -1,5 +1,17 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Question / discussion
-    url: https://github.com/orgs/openbimrs/discussions
-    about: For open-ended questions that aren't a concrete bug or feature.
+  - name: 🚀 Request new functionality
+    url: https://github.com/openbimrs/step/discussions/new?category=ideas
+    about: Start with scope and design; accepted capabilities become typed issues.
+
+  - name: ⚡ Suggest an optimization
+    url: https://github.com/openbimrs/step/discussions/new?category=ideas&title=%5Boptimization%5D%20
+    about: Propose making working behavior faster or lighter, backed by a same-harness measurement.
+
+  - name: 💬 Ask a question
+    url: https://github.com/openbimrs/step/discussions/new?category=q-a
+    about: Usage and design questions belong in answerable Discussions.
+
+  - name: 🗺️ Roadmap and current state
+    url: https://github.com/orgs/openbimrs/projects/20
+    about: Milestones carry release horizons; the repository board carries workflow state.

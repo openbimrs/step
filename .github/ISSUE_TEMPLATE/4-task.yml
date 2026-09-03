@@ -1,0 +1,73 @@
+name: 🛠️ Tracked work (maintainers)
+description: File accepted, scoped work after discussion or for a known engineering task.
+title: "[task]: "
+type: Task
+labels: ["capability"]
+assignees: ["GeneralPawz"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🛠️ Tracked work
+
+        This form records work whose scope is already agreed. If scope or
+        architecture is still open, start in Discussions.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: The bounded work, in one paragraph.
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why now
+      description: What does this unblock? Link the discussion, standard, issue, or evidence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done
+      description: Checkable exit criteria—commands and observable outcomes, not adjectives.
+      placeholder: |
+        - [ ] A failing regression test proves the gap
+        - [ ] Implementation satisfies the stated contract
+        - [ ] Full repository gate passes
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        Use checkboxes for coupled acceptance criteria in one landing. Use
+        sub-issues when a piece is independently assignable or lands separately.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - model
+        - codecs
+        - validation
+        - geometry
+        - domain
+        - integration
+        - architecture
+        - docs
+        - release
+    validations:
+      required: true
+
+  - type: dropdown
+    id: effort
+    attributes:
+      label: Effort
+      options: [Low, Medium, High]
+    validations:
+      required: true
