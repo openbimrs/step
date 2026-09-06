@@ -24,6 +24,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- `EntityDef::where_rules` captures each entity's `WHERE` rules as a label
+  and its expression text. Rule expressions are kept as written, with
+  whitespace normalised, rather than parsed: recording that a constraint
+  exists is separable from evaluating EXPRESS. This lets a consumer prove a
+  claim such as "no rule constrains this attribute" instead of asserting it
+  from the specification prose. Parsed from the full IFC4X3 schema: 752
+  rules across 487 entities.
+
 ### Changed
 
 - Relicensed repository-authored work from MIT to `AGPL-3.0-or-later`; historical releases remain under their published MIT terms, and third-party material retains its own terms.

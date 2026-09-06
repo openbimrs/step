@@ -69,6 +69,7 @@ fn structural_partial_express_parser_extracts_supported_declarations() {
                 aggregate: false
             }],
             derived: Vec::new(),
+            where_rules: Vec::new(),
         }
     );
     let item = &entities[1];
@@ -303,4 +304,112 @@ END_ENTITY;
         .map(|attribute| attribute.name.as_str())
         .collect();
     assert_eq!(names, ["Name"], "the UNIQUE block is not an attribute");
+}
+
+/// A `WHERE` block is captured as labelled rules.
+///
+/// Recording that a constraint exists, and what it says, is what lets a
+/// consumer prove "no rule constrains this" instead of asserting it from
+/// prose. The expression is kept verbatim; evaluating EXPRESS is a separate
+/// concern.
+#[test]
+fn where_rules_are_captured_with_labels_and_expressions() {
+    let source = "\
+ENTITY IfcSurfaceCurve
+ SUBTYPE OF (IfcCurve);
+\tCurve3D : IfcCurve;
+ WHERE
+\tCurveIs3D : Curve3D.Dim = 3;
+\tCurveIsNotPcurve : NOT ('IFC4.IFCPCURVE' IN TYPEOF(Curve3D));
+END_ENTITY;";
+    let schema = parse(source);
+    let entity = schema
+        .entities
+        .iter()
+        .find(|entity| entity.name.eq_ignore_ascii_case("IfcSurfaceCurve"))
+        .expect("entity");
+    let labels: Vec<_> = entity
+        .where_rules
+        .iter()
+        .map(|r| r.label.as_str())
+        .collect();
+    assert_eq!(labels, ["CurveIs3D", "CurveIsNotPcurve"]);
+    assert_eq!(entity.where_rules[0].expression, "Curve3D.Dim = 3");
+    assert_eq!(
+        entity.where_rules[1].expression,
+        "NOT ('IFC4.IFCPCURVE' IN TYPEOF(Curve3D))"
+    );
+    // The attribute list must survive the WHERE block.
+    assert_eq!(entity.attributes.len(), 1);
+}
+
+/// A multi-line rule body is captured whole, not cut at the first newline.
+///
+/// Rule expressions routinely span lines and nest `QUERY(x <* set | predicate)`;
+/// `IfcAdvancedFace` in IFC4X3 declares three such rules, the longest running
+/// eleven lines. Whitespace is normalised so the stored text stays comparable.
+///
+/// The block start uses `find_block_keyword` for the same reason the attribute
+/// list does -- a statement-level check rather than a keyword search. No IFC4X3
+/// entity currently writes `WHERE` inside an earlier block, so that choice is
+/// defence against a legal schema this parser has not met, not a fix for an
+/// observed break.
+#[test]
+fn a_multi_line_query_rule_is_captured_whole() {
+    let source = "\
+ENTITY Face;
+\tBounds : SET OF Bound;
+ WHERE
+\tFirstRule : SIZEOF(QUERY (b <* Bounds |
+\t  NOT ('SCHEMA.LOOP' IN TYPEOF(b)))) = 0;
+\tSecondRule : SIZEOF(Bounds) > 0;
+END_ENTITY;";
+    let schema = parse(source);
+    let entity = schema
+        .entities
+        .iter()
+        .find(|entity| entity.name.eq_ignore_ascii_case("Face"))
+        .expect("entity");
+    let labels: Vec<_> = entity
+        .where_rules
+        .iter()
+        .map(|r| r.label.as_str())
+        .collect();
+    assert_eq!(labels, ["FirstRule", "SecondRule"]);
+    // The multi-line rule is normalised to one line, not cut at the newline.
+    assert_eq!(
+        entity.where_rules[0].expression,
+        "SIZEOF(QUERY (b <* Bounds | NOT ('SCHEMA.LOOP' IN TYPEOF(b)))) = 0"
+    );
+    assert_eq!(entity.attributes.len(), 1);
+}
+
+/// `WHERE` appearing inside an earlier block does not start the rule block.
+///
+/// No IFC4X3 entity does this, but EXPRESS permits it and a keyword search
+/// would take the DERIVE-block occurrence as the block start, silently
+/// dropping every real rule. This pins the statement-level behaviour.
+#[test]
+fn a_where_token_inside_an_earlier_block_is_not_the_block_start() {
+    let source = "\
+ENTITY Holder;
+\tItems : SET OF Item;
+ DERIVE
+\tPicked : Item := QUERY(i <* SELF.Items | i.Kind = 'WHERE')[1];
+ WHERE
+\tRealRule : SIZEOF(Items) > 0;
+END_ENTITY;";
+    let schema = parse(source);
+    let entity = schema
+        .entities
+        .iter()
+        .find(|entity| entity.name.eq_ignore_ascii_case("Holder"))
+        .expect("entity");
+    let labels: Vec<_> = entity
+        .where_rules
+        .iter()
+        .map(|r| r.label.as_str())
+        .collect();
+    assert_eq!(labels, ["RealRule"]);
+    assert_eq!(entity.derived, ["Picked"]);
 }

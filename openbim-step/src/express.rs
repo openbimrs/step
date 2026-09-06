@@ -60,6 +60,23 @@ impl Attribute {
     }
 }
 
+/// One `WHERE` rule: a named constraint an instance must satisfy.
+///
+/// EXPRESS states these as `Label : expression;`. The expression is kept as
+/// written rather than parsed: it is a full EXPRESS expression language
+/// (TYPEOF, SIZEOF, QUERY, arithmetic), and evaluating it is a separate
+/// concern from recording that the constraint exists and what it says.
+///
+/// Capturing them lets a consumer prove a claim like "no rule constrains
+/// this attribute" instead of asserting it from prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WhereRule {
+    /// Rule label as declared, e.g. `CurveIs3D`.
+    pub label: String,
+    /// Constraint expression as written, whitespace-normalised.
+    pub expression: String,
+}
+
 /// One structural entity declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntityDef {
@@ -95,6 +112,12 @@ pub struct EntityDef {
     /// slot, so consumers resolving slots should match against inherited
     /// attribute names rather than assuming every entry is positional.
     pub derived: Vec<String>,
+    /// `WHERE` rules declared by this entity, in declaration order.
+    ///
+    /// Only this entity's own rules: EXPRESS does not merge a subtype's
+    /// rules with its supertype's, and a consumer checking an instance must
+    /// walk the supertype chain itself.
+    pub where_rules: Vec<WhereRule>,
 }
 
 impl EntityDef {
@@ -107,6 +130,7 @@ impl EntityDef {
             abstract_: false,
             attributes: Vec::new(),
             derived: Vec::new(),
+            where_rules: Vec::new(),
         }
     }
 
@@ -348,6 +372,7 @@ fn parse_entity(block: &str) -> Option<EntityDef> {
         .filter_map(parse_attribute)
         .collect();
     let derived = parse_derive_block(block, &upper, header_end + 1);
+    let where_rules = parse_where_block(block, &upper, header_end + 1);
 
     Some(EntityDef {
         name,
@@ -355,7 +380,55 @@ fn parse_entity(block: &str) -> Option<EntityDef> {
         abstract_,
         attributes,
         derived,
+        where_rules,
     })
+}
+
+/// Collect the `WHERE` rules declared by one entity.
+///
+/// The block runs from a statement-level `WHERE` to `END_ENTITY`. Each rule is
+/// `Label : expression;`. `find_block_keyword` is required rather than a plain
+/// keyword search: `WHERE` also appears inside QUERY expressions
+/// (`QUERY(t <* Types | WHERE ...)`), and treating one of those as the block
+/// start would drop every rule declared before it.
+///
+/// Splitting rules on `;` is safe because EXPRESS expressions contain no
+/// semicolons; a rule's expression may still span lines, so whitespace is
+/// normalised to keep the stored text comparable.
+/// Parse one `Label : expression` statement from a `WHERE` block.
+///
+/// The label ends at the first `:`. A rule expression may itself contain `:`
+/// (`a <= b : c` does not occur, but qualified enum references like
+/// `IfcEnum.VALUE` and ranges do), so only the first is a separator.
+fn parse_where_rule(statement: &str) -> Option<WhereRule> {
+    let (label, expression) = statement.split_once(':')?;
+    let label = label.trim();
+    if label.is_empty() || !label.bytes().all(is_identifier_byte) {
+        return None;
+    }
+    let expression = expression.split_whitespace().collect::<Vec<_>>().join(" ");
+    if expression.is_empty() {
+        return None;
+    }
+    Some(WhereRule {
+        label: label.to_owned(),
+        expression,
+    })
+}
+
+fn parse_where_block(block: &str, upper: &str, from: usize) -> Vec<WhereRule> {
+    let Some(start) = find_block_keyword(block, upper, "WHERE", from) else {
+        return Vec::new();
+    };
+    let start = start + "WHERE".len();
+    let end = find_keyword(upper, "END_ENTITY", start).unwrap_or(block.len());
+    if end <= start {
+        return Vec::new();
+    }
+    block[start..end]
+        .split(';')
+        .filter_map(parse_where_rule)
+        .collect()
 }
 
 /// Collect the attribute names declared in an entity's `DERIVE` block.
