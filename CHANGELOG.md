@@ -24,6 +24,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- `SchemaGraph::direct_subtypes` and `SchemaGraph::subtypes`: the downward
+  counterpart of `supertypes`. `subtypes(x)` is every entity `y != x` for
+  which `is_a(y, x)` holds, at any depth, in a deterministic sorted
+  pre-order. A test checks that equivalence for every ordered entity pair.
+  Answering "every `IfcElement`" needs this; `EntityDef` records only the
+  upward edge, so the child index is built once at construction.
+
 ## [0.5.0] - 2026-09-05
 
 ### Added

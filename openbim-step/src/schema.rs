@@ -58,17 +58,34 @@ pub struct SchemaGraph {
     name: String,
     entities: HashMap<String, EntityDef>,
     types: HashMap<String, TypeDef>,
+    /// Upper-cased supertype name to the declared names of its direct
+    /// subtypes, sorted. Derived once at construction: `EntityDef` records
+    /// only the upward edge, and answering "what inherits from X" by scanning
+    /// every declaration per call is quadratic over a whole-model query.
+    children: HashMap<String, Vec<String>>,
 }
 
 impl SchemaGraph {
     /// Indexes a parsed schema for querying.
     #[must_use]
     pub fn new(parsed: ParsedSchema) -> Self {
-        let entities = parsed
+        let entities: HashMap<String, EntityDef> = parsed
             .entities
             .into_iter()
             .map(|entity| (entity.name.to_ascii_uppercase(), entity))
             .collect();
+        let mut children: HashMap<String, Vec<String>> = HashMap::new();
+        for entity in entities.values() {
+            if let Some(supertype) = &entity.supertype {
+                children
+                    .entry(supertype.to_ascii_uppercase())
+                    .or_default()
+                    .push(entity.name.clone());
+            }
+        }
+        for names in children.values_mut() {
+            names.sort_unstable_by_key(|name| name.to_ascii_uppercase());
+        }
         let types = parsed
             .types
             .into_iter()
@@ -78,6 +95,7 @@ impl SchemaGraph {
             name: parsed.name,
             entities,
             types,
+            children,
         }
     }
 
@@ -165,6 +183,46 @@ impl SchemaGraph {
             current = Some(parent);
         }
         chain
+    }
+
+    /// Entities declaring `SUBTYPE OF (name)` directly, sorted by name.
+    ///
+    /// Excludes `name` itself. Names a supertype the schema never declares
+    /// the same way [`Self::supertypes`] does: if `A SUBTYPE OF (Missing)`,
+    /// then `direct_subtypes("Missing")` is `["A"]`, keeping the two
+    /// directions consistent on a partial schema.
+    #[must_use]
+    pub fn direct_subtypes(&self, name: &str) -> Vec<&str> {
+        self.children
+            .get(&name.to_ascii_uppercase())
+            .map(|names| names.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+
+    /// Every entity that inherits from `name`, at any depth.
+    ///
+    /// The downward counterpart of [`Self::supertypes`]: excludes `name`
+    /// itself, and `y` is in `subtypes(x)` exactly when `is_a(y, x)` holds
+    /// for `y != x`. Order is a depth-first pre-order with siblings sorted by
+    /// name, so the result is deterministic across runs and platforms.
+    ///
+    /// Terminates on a malformed cyclic schema: each entity is visited once.
+    #[must_use]
+    pub fn subtypes(&self, name: &str) -> Vec<&str> {
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(name.to_ascii_uppercase());
+        let mut out = Vec::new();
+        // Children are pushed in reverse so the sorted first sibling pops
+        // first, which is what makes this a pre-order and not a post-order.
+        let mut stack: Vec<&str> = self.direct_subtypes(name).into_iter().rev().collect();
+        while let Some(current) = stack.pop() {
+            if !seen.insert(current.to_ascii_uppercase()) {
+                continue;
+            }
+            out.push(current);
+            stack.extend(self.direct_subtypes(current).into_iter().rev());
+        }
+        out
     }
 
     /// Every attribute slot in **Part 21 positional order**, inherited first.
@@ -329,5 +387,75 @@ END_SCHEMA;";
         );
         assert_eq!(schema.supertypes("A"), ["Missing"]);
         assert!(schema.is_a("A", "Missing"));
+        assert_eq!(
+            schema.subtypes("Missing"),
+            ["A"],
+            "the downward walk must agree with is_a on a partial schema"
+        );
+    }
+
+    /// Two branches under one root, declared out of alphabetical order, so
+    /// both sibling sorting and pre-order nesting are observable.
+    const TREE: &str = "\
+SCHEMA TREE;
+ENTITY Root; END_ENTITY;
+ENTITY Wall SUBTYPE OF (Root); END_ENTITY;
+ENTITY Door SUBTYPE OF (Root); END_ENTITY;
+ENTITY WallStandardCase SUBTYPE OF (Wall); END_ENTITY;
+ENTITY WallElementedCase SUBTYPE OF (Wall); END_ENTITY;
+ENTITY Unrelated; END_ENTITY;
+END_SCHEMA;";
+
+    #[test]
+    fn direct_subtypes_are_one_level_and_sorted() {
+        let schema = SchemaGraph::from_express(TREE);
+        assert_eq!(schema.direct_subtypes("root"), ["Door", "Wall"]);
+        assert!(schema.direct_subtypes("Door").is_empty(), "a leaf");
+        assert!(schema.direct_subtypes("NotAThing").is_empty());
+    }
+
+    #[test]
+    fn subtypes_walk_every_depth_in_sorted_pre_order() {
+        let schema = SchemaGraph::from_express(TREE);
+        assert_eq!(
+            schema.subtypes("ROOT"),
+            ["Door", "Wall", "WallElementedCase", "WallStandardCase"],
+            "a grandchild must follow its own parent, not trail the whole level"
+        );
+        assert!(!schema.subtypes("Root").contains(&"Root"), "not reflexive");
+        assert!(!schema.subtypes("Root").contains(&"Unrelated"));
+    }
+
+    /// `subtypes` is defined as the inverse of `is_a`; check that for every
+    /// ordered pair instead of trusting the two walks to agree by design.
+    #[test]
+    fn subtypes_is_exactly_the_inverse_of_is_a() {
+        for source in [CHAIN, TREE] {
+            let schema = SchemaGraph::from_express(source);
+            let names: Vec<&str> = schema.entity_names().collect();
+            for &ancestor in &names {
+                let down = schema.subtypes(ancestor);
+                for &candidate in &names {
+                    let expected = candidate != ancestor && schema.is_a(candidate, ancestor);
+                    assert_eq!(
+                        down.contains(&candidate),
+                        expected,
+                        "{candidate} vs {ancestor}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A cyclic supertype must not make the downward walk loop.
+    #[test]
+    fn a_cyclic_subtype_walk_terminates() {
+        let schema = SchemaGraph::from_express(
+            "SCHEMA S;\
+             ENTITY A SUBTYPE OF (B); END_ENTITY;\
+             ENTITY B SUBTYPE OF (A); END_ENTITY;\
+             END_SCHEMA;",
+        );
+        assert_eq!(schema.subtypes("A"), ["B"]);
     }
 }
