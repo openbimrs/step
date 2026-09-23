@@ -24,6 +24,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-22
+
 ### Added
 
 - `SchemaGraph::direct_subtypes` and `SchemaGraph::subtypes`: the downward
@@ -131,7 +133,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
 
-[Unreleased]: https://github.com/openbimrs/step/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/openbimrs/step/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/openbimrs/step/compare/v0.4.0...v0.5.0
 [0.2.1]: https://github.com/openbimrs/step/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/openbimrs/step/compare/v0.1.0...v0.2.0
