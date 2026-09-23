@@ -287,3 +287,32 @@ fn endsec_inside_a_binary_literal_is_not_a_section_end() {
         .expect("ENDSEC inside a binary literal is payload, not structure");
     assert_eq!(ids(&outcome.exchange), ["3"]);
 }
+
+#[test]
+fn recovery_treats_a_page_escaped_apostrophe_as_string_payload() {
+    // The damaged record carries `\S\'` inside a string, so the resync
+    // scanner must cross it. `\S\'` is one character, not a string close:
+    // treating it as a close makes the `;` inside the string look like a
+    // record end and desynchronizes every quote after it.
+    let input = exchange(
+        "#1= IFCWALL(@,'a\\S\\';b');\n\
+         #2= IFCDOOR('real');",
+    );
+    let outcome = parse_with(input.as_bytes(), ParseOptions::lenient())
+        .expect("a page-escaped apostrophe inside a string is payload");
+    assert_eq!(ids(&outcome.exchange), ["2"]);
+    assert_eq!(outcome.diagnostics.len(), 1, "{:?}", outcome.diagnostics);
+}
+
+#[test]
+fn recovery_does_not_read_a_page_escape_out_of_an_escaped_backslash() {
+    // `\\S\'` is `\` `S` `\` then a closing apostrophe. If resync misread it as
+    // a page escape it would stay inside the string and eat record `#2`.
+    let input = exchange(
+        "#1= IFCWALL(@,'a\\\\S\\');\n\
+         #2= IFCDOOR('real');",
+    );
+    let outcome = parse_with(input.as_bytes(), ParseOptions::lenient())
+        .expect("an escaped backslash before S is not a page escape");
+    assert_eq!(ids(&outcome.exchange), ["2"]);
+}

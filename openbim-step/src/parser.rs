@@ -398,6 +398,17 @@ impl<'a> Parser<'a> {
             let byte = self.input[position];
             match literal {
                 Literal::Text => {
+                    // Mirror `Lexer::lex_text`: `\\` is one escaped
+                    // backslash, and `\S\` escapes the next byte even when it
+                    // is an apostrophe. Upper case only, as in the lexer.
+                    if self.input[position..].starts_with(br"\\") {
+                        position += 2;
+                        continue;
+                    }
+                    if self.input[position..].starts_with(br"\S\") {
+                        position = (position + 4).min(self.input.len());
+                        continue;
+                    }
                     if byte == b'\'' {
                         if self.input.get(position + 1) == Some(&b'\'') {
                             position += 2;

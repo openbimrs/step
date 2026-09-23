@@ -191,3 +191,55 @@ fn escape_codec_supports_all_part21_forms_and_roundtrips_unicode() {
     }
     assert!(!encode("line\nNUL\0end").contains(['\n', '\0']));
 }
+
+/// `\S\` shifts exactly one following `LATIN_CODEPOINT` into the upper half of
+/// the active alphabet, and `APOSTROPHE` is a `LATIN_CODEPOINT` (ISO 10303-21:2016
+/// §5.2, §6.4.3.1). The apostrophe after `\S\` is therefore payload, never the
+/// string terminator: `\S\'` is `'` + 128, which is `§` in ISO 8859-1.
+#[test]
+fn page_escape_consumes_a_following_apostrophe_as_payload() {
+    let tokens = Lexer::new(b"'Stra\\S\\'e' 'x\\S\\''")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("a page-escaped apostrophe does not terminate the string");
+    assert!(matches!(&tokens[0].value, Token::Text(v) if v.as_ref() == b"Stra\\S\\'e"));
+    assert!(matches!(&tokens[1].value, Token::Text(v) if v.as_ref() == b"x\\S\\'"));
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(decode(b"Stra\\S\\'e"), "Stra\u{a7}e");
+    // Lower-case `\s\` is not a page directive: its apostrophe still closes.
+    let lower = Lexer::new(b"'a\\s\\'")
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(matches!(&lower[0].value, Token::Text(v) if v.as_ref() == b"a\\s\\"));
+}
+
+/// A doubled apostrophe directly before `)` or `,` is an escaped quote, not a
+/// terminator followed by punctuation. OCCT's flex lexer (`step.lex:113`)
+/// ends strings on `'` + `)`/`,` and loses 128 records of buildingSMART's
+/// `IFC4_ADD2.ifc` this way (`... type ''A-1'') ...`).
+#[test]
+fn doubled_apostrophe_before_list_punctuation_stays_inside_the_string() {
+    let tokens = Lexer::new(b"('type ''A-1'')', 'a '''', b')")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("doubled apostrophes lex");
+    let texts: Vec<_> = tokens
+        .iter()
+        .filter_map(|t| match &t.value {
+            Token::Text(v) => Some(decode(v)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, ["type 'A-1')", "a '', b"]);
+}
+
+/// `\\` is an escaped backslash, so in `\\S\'` the `S\` is ordinary text and
+/// the apostrophe closes the string. Consuming `\\` first keeps its second
+/// byte from being misread as the start of a `\S\` page escape.
+#[test]
+fn escaped_backslash_does_not_open_a_page_escape() {
+    let tokens = Lexer::new(b"'a\\\\S\\' 'b'")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("escaped backslash followed by S lexes");
+    assert!(matches!(&tokens[0].value, Token::Text(v) if v.as_ref() == b"a\\\\S\\"));
+    assert!(matches!(&tokens[1].value, Token::Text(v) if v.as_ref() == b"b"));
+    assert_eq!(decode(b"a\\\\S\\"), "a\\S\\");
+}

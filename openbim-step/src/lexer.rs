@@ -328,6 +328,23 @@ impl<'a> Lexer<'a> {
         self.position += 1;
         let body_start = self.position;
         while let Some(&byte) = self.input.get(self.position) {
+            // `\\` is one escaped backslash. Consume it whole so its second
+            // byte cannot open a `\S\` page escape below.
+            if let Some(end) = self.match_ignoring_text_controls(self.position, br"\\") {
+                self.position = end;
+                continue;
+            }
+            // `\S\` takes exactly one following LATIN_CODEPOINT, and
+            // APOSTROPHE is one (ISO 10303-21:2016 §5.2, §6.4.3.1). That byte
+            // is payload even when it is `'`, so it never ends the literal.
+            if let Some(end) = self.match_ignoring_text_controls(self.position, br"\S\") {
+                self.position = end;
+                self.skip_ignored_controls();
+                if self.position < self.input.len() {
+                    self.position += 1;
+                }
+                continue;
+            }
             if byte == b'\'' {
                 if let Some(end) = self.match_ignoring_text_controls(self.position, b"''") {
                     self.position = end;

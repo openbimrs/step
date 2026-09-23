@@ -24,6 +24,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Fixed
+
+- A `\S\` page escape followed by an apostrophe no longer ends the string
+  literal. `\S\` takes exactly one following `LATIN_CODEPOINT`, which includes
+  the apostrophe (ISO 10303-21:2016 §5.2, §6.4.3.1), so `'Stra\S\'e'` is one
+  string decoding to `Stra§e`. Previously it failed to lex. The recovery
+  resynchronizer applies the same rule, and `\\` is consumed as one escaped
+  backslash in both so its second byte cannot open a page escape (#1).
+
 ## [0.5.1] - 2026-09-22
 
 ### Added
