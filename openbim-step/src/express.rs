@@ -77,13 +77,29 @@ pub struct WhereRule {
     pub expression: String,
 }
 
+/// One explicit redeclaration of an inherited attribute: `SELF\X.a : T;`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Redeclaration {
+    /// The supertype named in the qualifier (`X`), as written.
+    pub supertype: String,
+    /// The inherited attribute (`a`), unqualified.
+    pub name: String,
+    /// The narrowed type token, extracted like [`Attribute::type_name`].
+    pub type_name: String,
+}
+
 /// One structural entity declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntityDef {
     /// Declared entity name.
     pub name: String,
-    /// First direct supertype, when a `SUBTYPE OF` clause is present.
-    pub supertype: Option<String>,
+    /// Direct supertypes in `SUBTYPE OF` order; empty for a root entity.
+    ///
+    /// EXPRESS allows several (`SUBTYPE OF (a, b)`), and the order is
+    /// load-bearing: ISO 10303-21:2016 §12.2.5.2 lays inherited attributes
+    /// out supertype by supertype in exactly this order. IFC never uses more
+    /// than one; the AP schemas do (AP242: 248 entities).
+    pub supertypes: Vec<String>,
     /// Whether the declaration includes `ABSTRACT`.
     pub abstract_: bool,
     /// Explicit attributes declared by this entity, excluding derived and
@@ -112,6 +128,14 @@ pub struct EntityDef {
     /// slot, so consumers resolving slots should match against inherited
     /// attribute names rather than assuming every entry is positional.
     pub derived: Vec<String>,
+    /// Explicit redeclarations of inherited attributes (`SELF\X.a : T;`).
+    ///
+    /// A redeclaration narrows the type of an inherited attribute; it is not
+    /// a new attribute. ISO 10303-21:2016 §12.2.8: it has "no effect on the
+    /// encoding" and "shall not be considered an attribute of the subtype for
+    /// encoding purposes". It is therefore kept out of [`Self::attributes`],
+    /// which would otherwise grow a positional slot no record contains.
+    pub redeclared: Vec<Redeclaration>,
     /// `WHERE` rules declared by this entity, in declaration order.
     ///
     /// Only this entity's own rules: EXPRESS does not merge a subtype's
@@ -126,18 +150,37 @@ impl EntityDef {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            supertype: None,
+            supertypes: Vec::new(),
             abstract_: false,
             attributes: Vec::new(),
             derived: Vec::new(),
+            redeclared: Vec::new(),
             where_rules: Vec::new(),
         }
     }
 
-    /// Sets the direct supertype.
+    /// Appends a direct supertype, after any already declared.
+    ///
+    /// Call once per supertype in `SUBTYPE OF` order.
     #[must_use]
     pub fn with_supertype(mut self, supertype: impl Into<String>) -> Self {
-        self.supertype = Some(supertype.into());
+        self.supertypes.push(supertype.into());
+        self
+    }
+
+    /// The first direct supertype, if any.
+    ///
+    /// Sufficient for single-inheritance schemas such as IFC. Code that must
+    /// be correct for any EXPRESS schema reads [`Self::supertypes`].
+    #[must_use]
+    pub fn supertype(&self) -> Option<&str> {
+        self.supertypes.first().map(String::as_str)
+    }
+
+    /// Records an explicit redeclaration of an inherited attribute.
+    #[must_use]
+    pub fn with_redeclared(mut self, redeclaration: Redeclaration) -> Self {
+        self.redeclared.push(redeclaration);
         self
     }
 
@@ -165,6 +208,16 @@ impl EntityDef {
         self.derived
             .iter()
             .any(|declared| declared.eq_ignore_ascii_case(name))
+    }
+
+    /// Whether this entity explicitly redeclares the inherited `name`.
+    ///
+    /// Case-insensitive, like [`Self::is_derived`].
+    #[must_use]
+    pub fn is_redeclared(&self, name: &str) -> bool {
+        self.redeclared
+            .iter()
+            .any(|declared| declared.name.eq_ignore_ascii_case(name))
     }
 }
 
@@ -359,7 +412,7 @@ fn parse_entity(block: &str) -> Option<EntityDef> {
         .next()?
         .trim_matches(|character: char| !character.is_alphanumeric() && character != '_')
         .to_owned();
-    let supertype = clause_name(header, header_upper, "SUBTYPE OF");
+    let supertypes = clause_names(header, header_upper, "SUBTYPE OF");
     let abstract_ = find_keyword(header_upper, "ABSTRACT", 0).is_some();
 
     let body_end = ["DERIVE", "INVERSE", "UNIQUE", "WHERE", "END_ENTITY"]
@@ -367,19 +420,25 @@ fn parse_entity(block: &str) -> Option<EntityDef> {
         .filter_map(|keyword| find_block_keyword(block, &upper, keyword, header_end + 1))
         .min()
         .unwrap_or(block.len());
-    let attributes = block[header_end + 1..body_end]
-        .split(';')
-        .filter_map(parse_attribute)
-        .collect();
+    let mut attributes = Vec::new();
+    let mut redeclared = Vec::new();
+    for statement in block[header_end + 1..body_end].split(';') {
+        if let Some(redeclaration) = parse_redeclaration(statement) {
+            redeclared.push(redeclaration);
+        } else if let Some(attribute) = parse_attribute(statement) {
+            attributes.push(attribute);
+        }
+    }
     let derived = parse_derive_block(block, &upper, header_end + 1);
     let where_rules = parse_where_block(block, &upper, header_end + 1);
 
     Some(EntityDef {
         name,
-        supertype,
+        supertypes,
         abstract_,
         attributes,
         derived,
+        redeclared,
         where_rules,
     })
 }
@@ -478,16 +537,51 @@ fn derived_attribute_name(statement: &str) -> Option<String> {
     Some(name.to_owned())
 }
 
-fn clause_name(header: &str, upper: &str, clause: &str) -> Option<String> {
-    let position = find_keyword(upper, clause, 0)? + clause.len();
-    let open = header[position..].find('(')? + position + 1;
-    let close = header[open..].find(')')? + open;
+/// Every name in a `CLAUSE (a, b, ...)` list, in written order.
+fn clause_names(header: &str, upper: &str, clause: &str) -> Vec<String> {
+    let Some(position) = find_keyword(upper, clause, 0).map(|p| p + clause.len()) else {
+        return Vec::new();
+    };
+    let Some(open) = header[position..].find('(').map(|o| position + o + 1) else {
+        return Vec::new();
+    };
+    let Some(close) = header[open..].find(')').map(|o| open + o) else {
+        return Vec::new();
+    };
     header[open..close]
         .split(',')
-        .next()
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Parse `SELF\X.a : T` as an explicit redeclaration, or `None` for an
+/// ordinary attribute statement.
+fn parse_redeclaration(statement: &str) -> Option<Redeclaration> {
+    let (target, _) = statement.split_once(':')?;
+    let target = target.trim();
+    let qualified = target
+        .get(..5)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("SELF\\"))
+        .map(|_| &target[5..])?;
+    let (supertype, name) = qualified.split_once('.')?;
+    let (supertype, name) = (supertype.trim(), name.trim());
+    if supertype.is_empty()
+        || name.is_empty()
+        || !supertype.bytes().all(is_identifier_byte)
+        || !name.bytes().all(is_identifier_byte)
+    {
+        return None;
+    }
+    // Reuse the attribute type extraction on a synthetic plain statement.
+    let type_name =
+        parse_attribute(&format!("{name}{}", &statement[statement.find(':')?..]))?.type_name;
+    Some(Redeclaration {
+        supertype: supertype.to_owned(),
+        name: name.to_owned(),
+        type_name,
+    })
 }
 
 fn parse_attribute(statement: &str) -> Option<Attribute> {

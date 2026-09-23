@@ -76,7 +76,7 @@ impl SchemaGraph {
             .collect();
         let mut children: HashMap<String, Vec<String>> = HashMap::new();
         for entity in entities.values() {
-            if let Some(supertype) = &entity.supertype {
+            for supertype in &entity.supertypes {
                 children
                     .entry(supertype.to_ascii_uppercase())
                     .or_default()
@@ -85,6 +85,8 @@ impl SchemaGraph {
         }
         for names in children.values_mut() {
             names.sort_unstable_by_key(|name| name.to_ascii_uppercase());
+            // `SUBTYPE OF (a, a)` is illegal but must not double-report.
+            names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         }
         let types = parsed
             .types
@@ -159,30 +161,61 @@ impl SchemaGraph {
             .any(|super_name| super_name.eq_ignore_ascii_case(ancestor))
     }
 
-    /// The supertype chain above `name`, nearest parent first.
+    /// The direct supertypes of `name`, in `SUBTYPE OF` order.
     ///
-    /// Excludes `name` itself. Bounded by a fixed depth limit so a malformed
-    /// cyclic schema terminates instead of hanging.
+    /// Empty for a root entity and for an entity the schema never declares.
+    #[must_use]
+    pub fn direct_supertypes(&self, name: &str) -> Vec<&str> {
+        self.entity(name)
+            .map(|def| def.supertypes.iter().map(String::as_str).collect())
+            .unwrap_or_default()
+    }
+
+    /// Every ancestor of `name`, each once.
+    ///
+    /// Depth-first in `SUBTYPE OF` order: a parent, then that parent's own
+    /// ancestors, then the next parent. For single inheritance this is the
+    /// chain nearest parent first. Excludes `name` itself.
+    ///
+    /// A supertype the schema names but never declares is still reported --
+    /// a consumer checking `is_a` against a partial schema should see the
+    /// declared relationship -- but cannot be walked past. Terminates on a
+    /// malformed cyclic schema: each entity is visited once, and the walk is
+    /// bounded in depth.
     #[must_use]
     pub fn supertypes(&self, name: &str) -> Vec<&str> {
-        let mut chain = Vec::new();
-        let mut current = self.entities.get(&name.to_ascii_uppercase());
-        for _ in 0..MAX_CHAIN_DEPTH {
-            let Some(def) = current else { break };
-            let Some(supertype) = def.supertype.as_ref() else {
-                break;
-            };
-            let Some(parent) = self.entities.get(&supertype.to_ascii_uppercase()) else {
-                // The source names a supertype it never declares. Report the
-                // name anyway: a consumer checking `is_a` against a partial
-                // schema should still see the declared relationship.
-                chain.push(supertype.as_str());
-                break;
-            };
-            chain.push(parent.name.as_str());
-            current = Some(parent);
+        let mut seen = std::collections::HashSet::new();
+        seen.insert(name.to_ascii_uppercase());
+        let mut out = Vec::new();
+        self.collect_supertypes(name, 0, &mut seen, &mut out);
+        out
+    }
+
+    fn collect_supertypes<'s>(
+        &'s self,
+        name: &str,
+        depth: usize,
+        seen: &mut std::collections::HashSet<String>,
+        out: &mut Vec<&'s str>,
+    ) {
+        if depth >= MAX_CHAIN_DEPTH {
+            return;
         }
-        chain
+        let Some(def) = self.entity(name) else {
+            return;
+        };
+        for supertype in &def.supertypes {
+            if !seen.insert(supertype.to_ascii_uppercase()) {
+                continue;
+            }
+            match self.entity(supertype) {
+                Some(parent) => {
+                    out.push(parent.name.as_str());
+                    self.collect_supertypes(&parent.name, depth + 1, seen, out);
+                }
+                None => out.push(supertype.as_str()),
+            }
+        }
     }
 
     /// Entities declaring `SUBTYPE OF (name)` directly, sorted by name.
@@ -229,23 +262,44 @@ impl SchemaGraph {
     ///
     /// See the module documentation for why this ordering is load-bearing.
     ///
+    /// ISO 10303-21:2016 §12.2.5.2: each supertype is laid out in
+    /// `SUBTYPE OF` order, its own supertypes first, and a supertype reached
+    /// a second time (the diamond of multiple inheritance) contributes
+    /// nothing more -- "all references after the first one shall be ignored".
+    ///
     /// Derived redeclarations are *included*: they keep their inherited
     /// position and are written `*` in a Part 21 record. Use
     /// [`EntityDef::is_derived`] on the owning entity to tell them apart.
+    /// Explicit redeclarations (`SELF\X.a : T;`) add no slot (§12.2.8); the
+    /// parser keeps them out of [`EntityDef::attributes`].
     #[must_use]
     pub fn attributes(&self, name: &str) -> Vec<&Attribute> {
-        let mut chain: Vec<&EntityDef> = Vec::new();
-        let mut current = self.entities.get(&name.to_ascii_uppercase());
-        for _ in 0..MAX_CHAIN_DEPTH {
-            let Some(def) = current else { break };
-            chain.push(def);
-            let Some(supertype) = def.supertype.as_ref() else {
-                break;
-            };
-            current = self.entities.get(&supertype.to_ascii_uppercase());
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        self.collect_attributes(name, 0, &mut seen, &mut out);
+        out
+    }
+
+    fn collect_attributes<'s>(
+        &'s self,
+        name: &str,
+        depth: usize,
+        seen: &mut std::collections::HashSet<String>,
+        out: &mut Vec<&'s Attribute>,
+    ) {
+        if depth > MAX_CHAIN_DEPTH {
+            return;
         }
-        chain.reverse();
-        chain.iter().flat_map(|def| def.attributes.iter()).collect()
+        let Some(def) = self.entity(name) else {
+            return;
+        };
+        if !seen.insert(def.name.to_ascii_uppercase()) {
+            return;
+        }
+        for supertype in &def.supertypes {
+            self.collect_attributes(supertype, depth + 1, seen, out);
+        }
+        out.extend(def.attributes.iter());
     }
 
     /// Attribute names in positional order.

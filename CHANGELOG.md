@@ -24,6 +24,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `EntityDef::supertype: Option<String>` is replaced by
+  `EntityDef::supertypes: Vec<String>`, every direct supertype in
+  `SUBTYPE OF` order. `EntityDef::supertype()` returns the first, for
+  single-inheritance callers; `with_supertype` now appends. Migration:
+  `def.supertype.clone()` becomes `def.supertype().map(str::to_owned)`.
+- **Breaking:** `EntityDef` gained a public `redeclared` field, so
+  struct-literal construction must add it.
+
+### Added
+
+- `EntityDef::redeclared`, `EntityDef::is_redeclared`, and `Redeclaration`:
+  explicit `SELF\X.a : T;` redeclarations, kept apart from `attributes`.
+- `SchemaGraph::direct_supertypes`.
+
+### Fixed
+
+- Multiple inheritance (#2). Every supertype after the first was dropped, so
+  `SchemaGraph::attributes` omitted inherited slots and `is_a` missed
+  ancestors. Layouts now follow ISO 10303-21:2016 §12.2.5.2: supertypes in
+  `SUBTYPE OF` order, higher supertypes first, and a supertype reached twice
+  through a diamond counted once. `supertypes`, `subtypes`, and `is_a` walk
+  every parent. AP242 has 248 multi-parent entities; IFC has none.
+- Explicit redeclarations no longer add a phantom positional slot (#3).
+  `SELF\styled_item.item : plane_or_planar_box;` was parsed as a new
+  attribute named `SELF\styled_item.item`; ISO 10303-21:2016 §12.2.8 says it
+  has no effect on the encoding. This affected 481 AP242 entities, including
+  `advanced_face`.
+
+Checked against OCCT's per-entity parameter counts (`CheckNbParams` in its
+generated `RWStep*` readers): AP242 mismatches fell from 107 to 2, AP203e2
+from 24 to 1. The residuals are OCCT departing from Part 21 (`common_datum`
+diamond read twice; `characterized_representation` dropping derived `*`
+slots) and are pinned in `tests/schema_graph.rs`.
+
 ### Fixed
 
 - A `\S\` page escape followed by an apostrophe no longer ends the string

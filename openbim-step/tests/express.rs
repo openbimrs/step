@@ -11,7 +11,7 @@ fn schema_model_builders_preserve_the_ifc_schema_surface() {
     let entity = EntityDef::new("IfcExample")
         .with_supertype("IfcRoot")
         .with_attribute(attribute);
-    assert_eq!(entity.supertype.as_deref(), Some("IfcRoot"));
+    assert_eq!(entity.supertype(), Some("IfcRoot"));
     assert_eq!(entity.attributes.len(), 1);
 
     let defined = TypeDef {
@@ -60,7 +60,7 @@ fn structural_partial_express_parser_extracts_supported_declarations() {
         root,
         &EntityDef {
             name: "Root".into(),
-            supertype: None,
+            supertypes: Vec::new(),
             abstract_: true,
             attributes: vec![Attribute {
                 name: "Label".into(),
@@ -69,11 +69,12 @@ fn structural_partial_express_parser_extracts_supported_declarations() {
                 aggregate: false
             }],
             derived: Vec::new(),
+            redeclared: Vec::new(),
             where_rules: Vec::new(),
         }
     );
     let item = &entities[1];
-    assert_eq!(item.supertype.as_deref(), Some("Root"));
+    assert_eq!(item.supertype(), Some("Root"));
     assert_eq!(
         item.attributes.len(),
         2,
@@ -277,7 +278,7 @@ END_ENTITY;
         ["Maps", "Tag"],
         "the attribute after the inline UNIQUE must survive"
     );
-    assert_eq!(holder.supertype.as_deref(), Some("Base"));
+    assert_eq!(holder.supertype(), Some("Base"));
 }
 
 /// A real `UNIQUE` block still ends the attribute list.
@@ -412,4 +413,55 @@ END_ENTITY;";
         .collect();
     assert_eq!(labels, ["RealRule"]);
     assert_eq!(entity.derived, ["Picked"]);
+}
+
+// ---- #2 multiple inheritance, #3 explicit redeclarations -----------------
+// ISO 10303-21:2016 §12.2.5.2: supertypes are processed in SUBTYPE OF order,
+// higher supertypes first, and a supertype reached twice counts once.
+// §12.2.8: an explicit `SELF\X.a` redeclaration keeps X's slot and adds none.
+
+const MULTI: &str = r"
+SCHEMA M;
+ENTITY top; t : INTEGER; END_ENTITY;
+ENTITY a SUBTYPE OF (top); x : INTEGER; END_ENTITY;
+ENTITY b SUBTYPE OF (top); y : INTEGER; END_ENTITY;
+ENTITY c SUBTYPE OF (a, b); z : INTEGER; END_ENTITY;
+END_SCHEMA;
+";
+
+#[test]
+fn every_declared_supertype_is_recorded_in_order() {
+    let parsed = parse(MULTI);
+    let c = parsed.entities.iter().find(|e| e.name == "c").unwrap();
+    assert_eq!(c.supertypes, ["a", "b"]);
+    assert_eq!(c.supertype(), Some("a"));
+    let top = parsed.entities.iter().find(|e| e.name == "top").unwrap();
+    assert!(top.supertypes.is_empty());
+    assert_eq!(top.supertype(), None);
+}
+
+const REDECLARED: &str = r"
+SCHEMA R;
+ENTITY styled; name : STRING; target : thing; END_ENTITY;
+ENTITY plane SUBTYPE OF (styled);
+  SELF\styled.target : plane_target;
+  extra : INTEGER;
+END_ENTITY;
+END_SCHEMA;
+";
+
+#[test]
+fn explicit_redeclarations_are_not_new_attributes() {
+    let parsed = parse(REDECLARED);
+    let plane = parsed.entities.iter().find(|e| e.name == "plane").unwrap();
+    let names: Vec<_> = plane.attributes.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["extra"]);
+    assert_eq!(plane.redeclared.len(), 1);
+    let r = &plane.redeclared[0];
+    assert_eq!(
+        (r.supertype.as_str(), r.name.as_str(), r.type_name.as_str()),
+        ("styled", "target", "plane_target")
+    );
+    assert!(plane.is_redeclared("TARGET"));
+    assert!(!plane.is_redeclared("extra"));
 }

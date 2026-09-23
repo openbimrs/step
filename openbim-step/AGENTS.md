@@ -8,8 +8,10 @@ Generic ISO 10303-21 physical-file and ISO 10303-11 EXPRESS language infrastruct
 - arbitrary-precision instance IDs, records, parameters, headers, and exchange sections;
 - parser, deterministic writer, record partitioning, and incremental event sinks;
 - schema-neutral EXPRESS declarations, type expressions, and parser diagnostics;
-- the schema graph over those declarations: supertype chains, Part 21
-  positional attribute order, and defined-type alias resolution.
+- the schema graph over those declarations: supertype graphs (multiple
+  inheritance), Part 21 positional attribute order, and defined-type alias
+  resolution. Slot counts are cross-checked against OCCT in
+  `tests/schema_graph.rs` when `STEP_AP_SCHEMA_DIR` points at AP schemas.
 
 ## Does not own
 
