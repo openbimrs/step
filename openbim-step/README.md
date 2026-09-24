@@ -9,7 +9,7 @@ Implemented capabilities:
 - lossless lexical storage for unbounded instance identifiers and numeric values;
 - classic and Unicode STEP string forms, including alphabet-selection directives and edition-3 direct UTF-8;
 - structural, explicitly partial ISO 10303-11 EXPRESS parsing and AST types;
-- a schema graph giving Part 21 positional attribute layouts, including multiple inheritance and attribute redeclarations (ISO 10303-21:2016 §12.2.5–12.2.8).
+- a schema graph giving Part 21 positional attribute layouts, including multiple inheritance, attribute redeclarations, and complex entity instances (ISO 10303-21:2016 §12.2.5–12.2.8).
 
 IFC graph conversion, schema lowering, validation, migration, and domain policy deliberately live in the downstream [`openbimrs/ifc`](https://github.com/openbimrs/ifc) family.
 

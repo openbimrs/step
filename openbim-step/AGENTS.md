@@ -15,6 +15,10 @@ Generic ISO 10303-21 physical-file and ISO 10303-11 EXPRESS language infrastruct
   inheritance), Part 21 positional attribute order, and defined-type alias
   resolution. Slot counts are cross-checked against OCCT in
   `tests/schema_graph.rs` when `STEP_AP_SCHEMA_DIR` points at AP schemas.
+- complex entity instances (Part 21 external mapping) resolved against the
+  schema graph, in `src/schema/complex.rs`. `tests/complex.rs` checks every
+  complex instance of OCCT's AP214 test files when `STEP_AP_SCHEMA_DIR` and
+  `STEP_OCCT_DATA_DIR` are set.
 
 ## Does not own
 

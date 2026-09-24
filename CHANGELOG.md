@@ -6,6 +6,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- `SchemaGraph::resolve_complex` (#5): resolves a complex entity instance
+  (`#1=(A(..)B(..)C(..));`, the Part 21 external mapping, ISO 10303-21:2016
+  §12.2.5.3) against the schema. Returns a `ComplexLayout` with one
+  `ComplexPart` per partial record, each holding only the explicit
+  attributes its own entity declares (not the inherited ones, unlike
+  `attributes`), plus the instance's full supertype closure in `types`.
+  `ComplexSlot::is_derived` marks slots another type in the instance
+  redeclares as derived, which a conforming file writes as `*`.
+- `ComplexIssue`: unknown partial types, partial records out of ascending
+  name order, repeated partial records, and supertypes missing their own
+  partial record are reported, never silently accepted. Parts that resolve
+  are still returned alongside the issues.
+
+Checked against the real data: all 314 complex instances in OCCT's AP214
+test files `linkrods.step` (255) and `screw.step` (59) resolve against
+AP214e3 with no issues and slot counts equal to parameter counts, and every
+`*` falls in a slot marked derived.
+
 ## [0.6.1] - 2026-09-24
 
 ### Added

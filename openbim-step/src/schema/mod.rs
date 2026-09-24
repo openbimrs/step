@@ -38,6 +38,10 @@
 
 use std::collections::HashMap;
 
+mod complex;
+
+pub use complex::{ComplexIssue, ComplexLayout, ComplexPart, ComplexSlot};
+
 use crate::express::{Attribute, EntityDef, ParsedSchema, TypeDef, TypeKind};
 
 /// Longest supertype or alias chain this will walk before giving up.
