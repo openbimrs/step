@@ -31,7 +31,9 @@ pub use model::{
     DataRecord, DataSection, Exchange, HeaderRecord, HeaderSection, InstanceId, Parameter, Record,
     StandardHeader,
 };
-pub use parser::{parse, parse_events, parse_events_with, parse_with, Event, EventSink};
+pub use parser::{
+    parse, parse_events, parse_events_borrowed, parse_events_with, parse_with, Event, EventSink,
+};
 pub use partition::{data_record_spans, partition_data_records, Partition};
 pub use recovery::{Diagnostic, DiagnosticKind, OnMalformed, ParseOptions, ParseOutcome, Severity};
 pub use schema::SchemaGraph;

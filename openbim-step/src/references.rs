@@ -92,9 +92,9 @@ pub(crate) struct ReferenceCheck {
 
 impl ReferenceCheck {
     /// Records one successfully parsed data record spanning `span`.
-    pub(crate) fn record(
+    pub(crate) fn record<S>(
         &mut self,
-        record: &DataRecord<String>,
+        record: &DataRecord<S>,
         span: Span,
         diagnostics: &mut Vec<Diagnostic>,
     ) {
@@ -115,7 +115,7 @@ impl ReferenceCheck {
     /// Collects not-yet-defined references, depth-first and left to right,
     /// so they stay in source order. Recursion depth is bounded by the
     /// parser's [`MAX_PARAMETER_NESTING`](crate::MAX_PARAMETER_NESTING).
-    fn collect(&mut self, parameter: &Parameter) {
+    fn collect<S>(&mut self, parameter: &Parameter<S>) {
         match parameter {
             Parameter::Ref(id) => {
                 let key = Key::of(id);

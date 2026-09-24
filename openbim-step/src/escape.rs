@@ -8,6 +8,11 @@
 /// Unknown or malformed escapes are preserved verbatim instead of discarded.
 #[must_use]
 pub fn decode(raw: &[u8]) -> String {
+    // Most string bodies contain neither escape nor quote: the result is the
+    // whole body as one run, so skip the output buffer and its extra copy.
+    if memchr::memchr2(b'\'', b'\\', raw).is_none() {
+        return String::from_utf8_lossy(raw).into_owned();
+    }
     let mut output = String::with_capacity(raw.len());
     let mut position = 0;
     let mut alphabet = b'A';
@@ -32,9 +37,8 @@ pub fn decode(raw: &[u8]) -> String {
             }
             _ => {
                 let start = position;
-                while !matches!(raw.get(position), None | Some(b'\'' | b'\\')) {
-                    position += 1;
-                }
+                position = memchr::memchr2(b'\'', b'\\', &raw[start..])
+                    .map_or(raw.len(), |offset| start + offset);
                 output.push_str(&String::from_utf8_lossy(&raw[start..position]));
             }
         }

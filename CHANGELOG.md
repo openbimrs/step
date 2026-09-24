@@ -6,8 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- `parse_events_borrowed`: the same event stream as `parse_events_with`
+  (events, order, diagnostics, errors), with text as `Cow<'a, str>` borrowed
+  from the input wherever it needs no rewriting -- names, numbers,
+  enumerations, binaries, and strings without escapes or quotes. Names keep
+  their source case (the owned API upper-cases them). A consumer that
+  converts every value into its own model allocates once per value instead
+  of twice.
+
 ### Changed
 
+- `InstanceId` stores ids of up to 22 digits inline (every `u64` fits), so
+  a parse no longer allocates once per id and reference. Equality, hashing,
+  ordering, `Debug` and `Display` are unchanged; longer ids still work.
+- String decoding copies an escape-free body once instead of scanning and
+  re-appending it, and number and name values are built without a second
+  UTF-8 validation pass.
 - Faster tokenizing, output unchanged: string bodies jump to the next `\` or
   `'` instead of testing every byte for a print directive; whitespace is only
   checked for a directive or comment when it is followed by `\` or `/`;

@@ -4,6 +4,8 @@
 //! domain schema. Unknown header and data records therefore survive a
 //! parse/write/reparse cycle.
 
+use std::borrow::Cow;
+
 use crate::escape;
 use crate::lexer::{Lexer, Token};
 use crate::recovery::{Diagnostic, OnMalformed, ParseOptions, ParseOutcome};
@@ -127,6 +129,91 @@ pub fn parse_events_with(
     Ok(parser.diagnostics)
 }
 
+/// Streams semantic records whose text borrows from `input` where it can.
+///
+/// Identical to [`parse_events_with`] -- same events, order, diagnostics and
+/// errors -- except that names, numbers, enumerations and binaries are
+/// `Cow::Borrowed` slices of `input` unless the source interrupted them with
+/// an ignored control (TAB, LF, CR, FF), and strings are borrowed unless they
+/// contain an escape or a quote. Name case is preserved as written (the owned
+/// API upper-cases); compare with `eq_ignore_ascii_case`. A consumer that
+/// converts every value anyway skips one allocation per value this way.
+/// # Errors
+///
+/// Returns the same diagnostics as [`parse_events_with`].
+pub fn parse_events_borrowed<'a>(
+    input: &'a [u8],
+    sink: &mut impl EventSink<Cow<'a, str>>,
+    options: ParseOptions,
+) -> Result<Vec<Diagnostic>, StepError> {
+    if !crate::is_step_file(input) {
+        return Err(StepError::not_step("missing ISO-10303-21 marker"));
+    }
+    let mut parser = Parser::new(input);
+    parser.options = options;
+    parser.references = options.check_references.then(ReferenceCheck::default);
+    parser.parse(sink)?;
+    Ok(parser.diagnostics)
+}
+
+/// How the parser turns lexemes into the caller's string type.
+///
+/// `String` reproduces the owned API exactly (names upper-cased, lossy UTF-8).
+/// `Cow<'a, str>` borrows from the input whenever the bytes are valid UTF-8
+/// and need no rewriting, and keeps name case as written.
+trait Text<'a>: Sized {
+    /// A record, typed-parameter or enumeration name.
+    fn name(bytes: Cow<'a, [u8]>) -> Self;
+    /// A number or binary lexeme.
+    fn lexeme(bytes: Cow<'a, [u8]>) -> Self;
+    /// An escaped string body.
+    fn text(raw: Cow<'a, [u8]>) -> Self;
+}
+
+impl<'a> Text<'a> for String {
+    fn name(bytes: Cow<'a, [u8]>) -> Self {
+        upper(&bytes)
+    }
+
+    fn lexeme(bytes: Cow<'a, [u8]>) -> Self {
+        lexeme_string(bytes)
+    }
+
+    fn text(raw: Cow<'a, [u8]>) -> Self {
+        escape::decode(&raw)
+    }
+}
+
+impl<'a> Text<'a> for Cow<'a, str> {
+    fn name(bytes: Cow<'a, [u8]>) -> Self {
+        borrowed_str(bytes)
+    }
+
+    fn lexeme(bytes: Cow<'a, [u8]>) -> Self {
+        borrowed_str(bytes)
+    }
+
+    fn text(raw: Cow<'a, [u8]>) -> Self {
+        // Without a quote or backslash there is nothing to decode, so the
+        // decoded text is the raw body itself.
+        match raw {
+            Cow::Borrowed(bytes) if memchr::memchr2(b'\\', b'\'', bytes).is_none() => {
+                borrowed_str(Cow::Borrowed(bytes))
+            }
+            raw => Cow::Owned(escape::decode(&raw)),
+        }
+    }
+}
+
+/// Borrows valid UTF-8 as `str`; otherwise the same lossy conversion as the
+/// owned API.
+fn borrowed_str(bytes: Cow<'_, [u8]>) -> Cow<'_, str> {
+    match bytes {
+        Cow::Borrowed(bytes) => String::from_utf8_lossy(bytes),
+        Cow::Owned(bytes) => Cow::Owned(lexeme_string(Cow::Owned(bytes))),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     BeforeStart,
@@ -168,7 +255,7 @@ impl<'a> Parser<'a> {
 
     // Keeping section dispatch together makes the state-machine transitions auditable.
     #[allow(clippy::too_many_lines)]
-    fn parse(&mut self, sink: &mut impl EventSink) -> Result<(), StepError> {
+    fn parse<S: Text<'a>>(&mut self, sink: &mut impl EventSink<S>) -> Result<(), StepError> {
         loop {
             let token = match self.next() {
                 Ok(Some(token)) => token,
@@ -253,7 +340,7 @@ impl<'a> Parser<'a> {
                     let parameters = self.parse_arguments()?;
                     self.expect_semicolon("after header record")?;
                     sink.event(Event::HeaderRecord(HeaderRecord {
-                        name: upper(&name),
+                        name: S::name(name),
                         parameters,
                     }));
                 }
@@ -291,17 +378,17 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses one `#id = ...;` data record, assuming the id token was consumed.
-    fn parse_data_record(
+    fn parse_data_record<S: Text<'a>>(
         &mut self,
         id: &[u8],
         id_span: Span,
-    ) -> Result<DataRecord<String>, StepError> {
+    ) -> Result<DataRecord<S>, StepError> {
         self.expect_equals()?;
         let record_token = self.next()?.ok_or_else(|| {
             StepError::syntax(Span::new(id_span.end, id_span.end), "missing record body")
         })?;
         let records = match record_token.value {
-            Token::Name(name) => vec![self.parse_named_record(&name)?],
+            Token::Name(name) => vec![self.parse_named_record(name)?],
             Token::OpenParen => {
                 let mut records = Vec::new();
                 loop {
@@ -320,7 +407,7 @@ impl<'a> Parser<'a> {
                             "expected complex record name",
                         ));
                     };
-                    records.push(self.parse_named_record(&name)?);
+                    records.push(self.parse_named_record(name)?);
                 }
                 let close = self.next()?.ok_or_else(|| {
                     StepError::syntax(self.eof_span(), "unterminated complex instance")
@@ -496,14 +583,17 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn parse_named_record(&mut self, name: &[u8]) -> Result<Record, StepError> {
+    fn parse_named_record<S: Text<'a>>(
+        &mut self,
+        name: Cow<'a, [u8]>,
+    ) -> Result<Record<S>, StepError> {
         Ok(Record {
-            name: upper(name),
+            name: S::name(name),
             parameters: self.parse_arguments()?,
         })
     }
 
-    fn parse_arguments(&mut self) -> Result<Vec<Parameter>, StepError> {
+    fn parse_arguments<S: Text<'a>>(&mut self) -> Result<Vec<Parameter<S>>, StepError> {
         let token = self
             .next()?
             .ok_or_else(|| StepError::syntax(self.eof_span(), "expected '(' after record name"))?;
@@ -516,7 +606,10 @@ impl<'a> Parser<'a> {
         self.parse_parameter_list(0)
     }
 
-    fn parse_parameter_list(&mut self, depth: usize) -> Result<Vec<Parameter>, StepError> {
+    fn parse_parameter_list<S: Text<'a>>(
+        &mut self,
+        depth: usize,
+    ) -> Result<Vec<Parameter<S>>, StepError> {
         if depth > crate::MAX_PARAMETER_NESTING {
             let span = match self.peek()? {
                 Some(token) => token.span,
@@ -550,7 +643,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_parameter(&mut self, depth: usize) -> Result<Parameter, StepError> {
+    fn parse_parameter<S: Text<'a>>(&mut self, depth: usize) -> Result<Parameter<S>, StepError> {
         let token = self
             .next()?
             .ok_or_else(|| StepError::syntax(self.eof_span(), "expected parameter"))?;
@@ -561,16 +654,10 @@ impl<'a> Parser<'a> {
                 InstanceId::new(std::str::from_utf8(&id).expect("instance digits are ASCII"))
                     .expect("lexer validates instance ids"),
             )),
-            Token::Integer(value) => Ok(Parameter::Integer(
-                String::from_utf8_lossy(&value).into_owned(),
-            )),
-            Token::Real(value) => Ok(Parameter::Real(
-                String::from_utf8_lossy(&value).into_owned(),
-            )),
-            Token::Text(raw) => Ok(Parameter::Text(escape::decode(&raw))),
-            Token::Binary(raw) => Ok(Parameter::Binary(
-                String::from_utf8_lossy(&raw).into_owned(),
-            )),
+            Token::Integer(value) => Ok(Parameter::Integer(S::lexeme(value))),
+            Token::Real(value) => Ok(Parameter::Real(S::lexeme(value))),
+            Token::Text(raw) => Ok(Parameter::Text(S::text(raw))),
+            Token::Binary(raw) => Ok(Parameter::Binary(S::lexeme(raw))),
             Token::Keyword(keyword) if keyword.eq_ignore_ascii_case(b"T") => {
                 Ok(Parameter::Bool(true))
             }
@@ -580,7 +667,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(keyword) if keyword.eq_ignore_ascii_case(b"U") => {
                 Ok(Parameter::LogicalUnknown)
             }
-            Token::Keyword(keyword) => Ok(Parameter::Enum(upper(&keyword))),
+            Token::Keyword(keyword) => Ok(Parameter::Enum(S::name(keyword))),
             Token::OpenParen => Ok(Parameter::List(self.parse_parameter_list(depth + 1)?)),
             Token::Name(name) => {
                 let Some(next) = self.peek()? else {
@@ -603,7 +690,7 @@ impl<'a> Parser<'a> {
                     Box::new(Parameter::List(parameters))
                 };
                 Ok(Parameter::Typed {
-                    type_name: upper(&name),
+                    type_name: S::name(name),
                     value,
                 })
             }
@@ -667,5 +754,23 @@ impl<'a> Parser<'a> {
 }
 
 fn upper(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).to_ascii_uppercase()
+    // Names reach here from the lexer, which admits only ASCII, so the lossy
+    // conversion never replaces anything; the fast path skips its scan.
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_ascii_uppercase(),
+        Err(_) => String::from_utf8_lossy(bytes).to_ascii_uppercase(),
+    }
+}
+
+/// A lexeme as an owned `String`, reusing an owned buffer instead of copying.
+/// Numbers and binaries are ASCII, so the lossy fallback never fires on them.
+fn lexeme_string(bytes: Cow<'_, [u8]>) -> String {
+    match bytes {
+        Cow::Borrowed(bytes) => match std::str::from_utf8(bytes) {
+            Ok(text) => text.to_owned(),
+            Err(_) => String::from_utf8_lossy(bytes).into_owned(),
+        },
+        Cow::Owned(bytes) => String::from_utf8(bytes)
+            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()),
+    }
 }
