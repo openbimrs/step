@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-24
+
 ### Added
 
 - `parse_parallel_with(input, options, threads)`: parses the data section
@@ -272,7 +274,8 @@ slots) and are pinned in `tests/schema_graph.rs`.
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
 
-[Unreleased]: https://github.com/openbimrs/step/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/openbimrs/step/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/openbimrs/step/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/openbimrs/step/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/openbimrs/step/compare/v0.5.1...v0.6.0
