@@ -7,6 +7,13 @@ Generic ISO 10303-21 physical-file and ISO 10303-11 EXPRESS language infrastruct
 - tokens, source spans, syntax diagnostics, and complete classic STEP string escaping;
 - arbitrary-precision instance IDs, records, parameters, headers, and exchange sections;
 - parser, deterministic writer, record partitioning, and incremental event sinks;
+- borrowed events (`parse_events_borrowed`) and the parallel parse
+  (`src/parallel.rs`). Invariant for the parallel parse: its result equals
+  `parse_with`'s exactly; a slice is used only if its parser lands on the
+  slice's end offset, anything else falls back to the sequential parse.
+  `tests/parallel.rs` checks equality over traps for the split guess;
+- performance work is measured, not assumed: equivalence against the last
+  release plus instruction counts (the dev VM is shared and noisy);
 - opt-in Part 21 reference integrity (duplicate ids, dangling references) as
   non-fatal diagnostics, in `src/references.rs` — syntax-level only, never
   schema-aware;

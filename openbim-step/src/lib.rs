@@ -16,6 +16,7 @@ mod header;
 /// Physical-file tokenizer.
 pub mod lexer;
 mod model;
+mod parallel;
 mod parser;
 mod partition;
 /// Malformed-record recovery policy and non-fatal diagnostics.
@@ -31,6 +32,7 @@ pub use model::{
     DataRecord, DataSection, Exchange, HeaderRecord, HeaderSection, InstanceId, Parameter, Record,
     StandardHeader,
 };
+pub use parallel::parse_parallel_with;
 pub use parser::{
     parse, parse_events, parse_events_borrowed, parse_events_with, parse_with, Event, EventSink,
 };

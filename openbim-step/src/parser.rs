@@ -236,6 +236,88 @@ struct Parser<'a> {
     diagnostics: Vec<Diagnostic>,
     /// Present only when the caller opted into reference checking.
     references: Option<ReferenceCheck>,
+    /// Where to stop early; only the parallel driver sets anything else.
+    stop: Stop,
+    /// The offset the parse stopped at, when it stopped as `stop` asked.
+    stopped: Option<usize>,
+    /// Source span of every data record emitted, when collected.
+    record_spans: Option<Vec<Span>>,
+}
+
+/// Where a restricted parse ends. The parallel driver parses the header up
+/// to `DATA;` and then each slice of the data section on its own thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stop {
+    /// Parse the whole input.
+    Never,
+    /// Stop right after `DATA;`, before the first data record.
+    AfterDataStart,
+    /// Stop when a record ends exactly at this offset.
+    AtOffset(usize),
+}
+
+/// One slice of the data section, parsed on its own.
+pub(crate) struct Chunk {
+    pub(crate) records: Vec<DataRecord>,
+    /// `records[i]` spans `spans[i]`, as the reference check needs.
+    pub(crate) spans: Vec<Span>,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    /// Whether the slice ended exactly at the requested offset. `false`
+    /// means the split point was not a record boundary for the parser.
+    pub(crate) aligned: bool,
+}
+
+/// Parses the header through `DATA;`. Returns the header records and the
+/// offset just past `DATA;`, or `None` when the parse never reaches a data
+/// section. There are no diagnostics to return: header and structure
+/// defects are fatal under every policy, and recovery and the reference
+/// check only act inside `DATA`.
+pub(crate) fn parse_prefix(
+    input: &[u8],
+    options: ParseOptions,
+) -> Result<Option<(HeaderSection, usize)>, StepError> {
+    let mut header = HeaderSection::default();
+    let mut parser = Parser::new(input);
+    parser.options = options;
+    parser.stop = Stop::AfterDataStart;
+    parser.parse(&mut |event: Event| {
+        if let Event::HeaderRecord(record) = event {
+            header.records.push(record);
+        }
+    })?;
+    debug_assert!(parser.diagnostics.is_empty());
+    Ok(parser.stopped.map(|offset| (header, offset)))
+}
+
+/// Parses the data section from `start`, which must be a record boundary,
+/// to `end` (`None`: to the end of the file, including `ENDSEC` and the end
+/// marker). The parser state at a record boundary is fully determined by
+/// the offset, so this is exactly what a whole-file parse does there.
+pub(crate) fn parse_chunk(
+    input: &[u8],
+    options: ParseOptions,
+    start: usize,
+    end: Option<usize>,
+) -> Result<Chunk, StepError> {
+    let mut records = Vec::new();
+    let mut parser = Parser::new(input);
+    parser.options = options;
+    parser.phase = Phase::Data;
+    parser.lexer.resume_at(start);
+    parser.last_end = start;
+    parser.record_spans = Some(Vec::new());
+    parser.stop = end.map_or(Stop::Never, Stop::AtOffset);
+    parser.parse(&mut |event: Event| {
+        if let Event::DataRecord(record) = event {
+            records.push(record);
+        }
+    })?;
+    Ok(Chunk {
+        records,
+        spans: parser.record_spans.take().unwrap_or_default(),
+        diagnostics: parser.diagnostics,
+        aligned: end.is_none() || parser.stopped.is_some(),
+    })
 }
 
 impl<'a> Parser<'a> {
@@ -250,6 +332,9 @@ impl<'a> Parser<'a> {
             options: ParseOptions::strict(),
             diagnostics: Vec::new(),
             references: None,
+            stop: Stop::Never,
+            stopped: None,
+            record_spans: None,
         }
     }
 
@@ -257,6 +342,22 @@ impl<'a> Parser<'a> {
     #[allow(clippy::too_many_lines)]
     fn parse<S: Text<'a>>(&mut self, sink: &mut impl EventSink<S>) -> Result<(), StepError> {
         loop {
+            if let Stop::AtOffset(end) = self.stop {
+                // Between records there is no lookahead, and the lexer sits
+                // just past the last `;`. Landing exactly on `end` is the
+                // only success; passing it means the split point was inside
+                // a record or literal, and the slice is not usable.
+                if self.lookahead.is_none() {
+                    let offset = self.lexer.offset();
+                    if offset == end {
+                        self.stopped = Some(end);
+                        return Ok(());
+                    }
+                    if offset > end {
+                        return Ok(());
+                    }
+                }
+            }
             let token = match self.next() {
                 Ok(Some(token)) => token,
                 Ok(None) => break,
@@ -299,6 +400,10 @@ impl<'a> Parser<'a> {
                     self.expect_semicolon("after DATA")?;
                     self.phase = Phase::Data;
                     sink.event(Event::StartData);
+                    if self.stop == Stop::AfterDataStart {
+                        self.stopped = Some(self.lexer.offset());
+                        return Ok(());
+                    }
                 }
                 Token::Name(name) if name.eq_ignore_ascii_case(b"ENDSEC") => {
                     self.expect_semicolon("after ENDSEC")?;
@@ -351,6 +456,9 @@ impl<'a> Parser<'a> {
                             if let Some(check) = &mut self.references {
                                 let span = Span::new(start, self.last_end);
                                 check.record(&record, span, &mut self.diagnostics);
+                            }
+                            if let Some(spans) = &mut self.record_spans {
+                                spans.push(Span::new(start, self.last_end));
                             }
                             sink.event(Event::DataRecord(record));
                         }

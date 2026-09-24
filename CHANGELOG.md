@@ -8,6 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ### Added
 
+- `parse_parallel_with(input, options, threads)`: parses the data section
+  on several threads and returns exactly what `parse_with` returns -- the
+  same exchange, the same diagnostics in the same order, the same error.
+  Slices start at guessed record boundaries; each slice's parser must land
+  exactly on its end offset, otherwise (a guess inside a string, comment or
+  damaged record, or any error) the file is parsed sequentially, so errors
+  and edge cases always come from the sequential parser. On seven IFC
+  files (18-109 MB) 8 threads parse 3-5x faster than one; 16 threads with
+  mimalloc reach 600-1000 MB/s. The worst case is one extra sequential
+  parse. Parse small files with `parse_with`.
 - `parse_events_borrowed`: the same event stream as `parse_events_with`
   (events, order, diagnostics, errors), with text as `Cow<'a, str>` borrowed
   from the input wherever it needs no rewriting -- names, numbers,
