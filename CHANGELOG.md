@@ -6,6 +6,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in reference-integrity diagnostics (#4):
+  `ParseOptions::check_references(true)` reports every data record whose
+  instance id was already defined (`DiagnosticKind::DuplicateId`, on the
+  later record) and each distinct id a record references that no record in
+  `DATA` defines (`DiagnosticKind::DanglingReference`, on the referencing
+  record). Forward references are legal (ISO 10303-21:2016 §11.2) and are
+  resolved at `ENDSEC`. Ids compare numerically, so `#07` is `#7`, including
+  ids beyond 64 bits. Works for `parse_with` and the streaming
+  `parse_events_with` alike. Nothing is dropped, so these diagnostics keep
+  `ParseOutcome::is_lossless` true.
+- `Diagnostic::kind` and `Diagnostic::instance`, and the `DiagnosticKind`
+  enum (`SkippedRecord`, `DuplicateId`, `DanglingReference`).
+
+### Changed
+
+- `ParseOutcome::is_lossless` is now true unless a record was skipped;
+  reference diagnostics do not count as loss. Only possible to observe with
+  the new option enabled.
+
+Measured on 100 MB files (1.0–1.5 M records, median of 5): enabling the
+check adds 26–33% to `parse_with`. Off by default, so existing callers pay
+nothing. Across the 757-file on-disk corpus it flags exactly one file:
+buildingSMART's IFC4 Add2 annex example `wall-elemented-case.ifc`, whose
+`#154` references `#161`, which the file never defines.
+
 ## [0.6.0] - 2026-09-24
 
 ### Changed

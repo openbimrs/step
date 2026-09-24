@@ -7,6 +7,9 @@ Generic ISO 10303-21 physical-file and ISO 10303-11 EXPRESS language infrastruct
 - tokens, source spans, syntax diagnostics, and complete classic STEP string escaping;
 - arbitrary-precision instance IDs, records, parameters, headers, and exchange sections;
 - parser, deterministic writer, record partitioning, and incremental event sinks;
+- opt-in Part 21 reference integrity (duplicate ids, dangling references) as
+  non-fatal diagnostics, in `src/references.rs` — syntax-level only, never
+  schema-aware;
 - schema-neutral EXPRESS declarations, type expressions, and parser diagnostics;
 - the schema graph over those declarations: supertype graphs (multiple
   inheritance), Part 21 positional attribute order, and defined-type alias

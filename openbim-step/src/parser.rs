@@ -7,6 +7,7 @@
 use crate::escape;
 use crate::lexer::{Lexer, Token};
 use crate::recovery::{Diagnostic, OnMalformed, ParseOptions, ParseOutcome};
+use crate::references::ReferenceCheck;
 use crate::{
     DataRecord, DataSection, Exchange, HeaderRecord, HeaderSection, InstanceId, Parameter, Record,
     Span, Spanned, StepError,
@@ -121,6 +122,7 @@ pub fn parse_events_with(
     }
     let mut parser = Parser::new(input);
     parser.options = options;
+    parser.references = options.check_references.then(ReferenceCheck::default);
     parser.parse(sink)?;
     Ok(parser.diagnostics)
 }
@@ -145,6 +147,8 @@ struct Parser<'a> {
     header_records_seen: usize,
     options: ParseOptions,
     diagnostics: Vec<Diagnostic>,
+    /// Present only when the caller opted into reference checking.
+    references: Option<ReferenceCheck>,
 }
 
 impl<'a> Parser<'a> {
@@ -158,6 +162,7 @@ impl<'a> Parser<'a> {
             header_records_seen: 0,
             options: ParseOptions::strict(),
             diagnostics: Vec::new(),
+            references: None,
         }
     }
 
@@ -222,6 +227,9 @@ impl<'a> Parser<'a> {
                             self.phase = Phase::BeforeData;
                         }
                         Phase::Data => {
+                            if let Some(check) = self.references.take() {
+                                check.finish(&mut self.diagnostics);
+                            }
                             sink.event(Event::EndData);
                             self.phase = Phase::BeforeEnd;
                         }
@@ -252,7 +260,13 @@ impl<'a> Parser<'a> {
                 Token::Id(id) if self.phase == Phase::Data => {
                     let start = token.span.start;
                     match self.parse_data_record(&id, token.span) {
-                        Ok(record) => sink.event(Event::DataRecord(record)),
+                        Ok(record) => {
+                            if let Some(check) = &mut self.references {
+                                let span = Span::new(start, self.last_end);
+                                check.record(&record, span, &mut self.diagnostics);
+                            }
+                            sink.event(Event::DataRecord(record));
+                        }
                         Err(error) => self.recover_or_fail(error, Some(start))?,
                     }
                 }

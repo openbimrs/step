@@ -10,7 +10,7 @@
 //! as a [`Diagnostic`] so a consumer can show what was lost instead of
 //! pretending the file was clean.
 
-use crate::{Exchange, Span};
+use crate::{Exchange, InstanceId, Span};
 use std::fmt;
 
 /// What to do when a data record cannot be parsed.
@@ -33,6 +33,9 @@ pub enum OnMalformed {
 pub struct ParseOptions {
     /// Policy for unparsable data records.
     pub on_malformed_record: OnMalformed,
+    /// Whether to report duplicate instance ids and references to ids that
+    /// are never defined. Off by default: strict parsing means syntax only.
+    pub check_references: bool,
 }
 
 impl ParseOptions {
@@ -41,6 +44,7 @@ impl ParseOptions {
     pub const fn strict() -> Self {
         Self {
             on_malformed_record: OnMalformed::Abort,
+            check_references: false,
         }
     }
 
@@ -49,6 +53,7 @@ impl ParseOptions {
     pub const fn lenient() -> Self {
         Self {
             on_malformed_record: OnMalformed::Skip,
+            check_references: false,
         }
     }
 
@@ -58,26 +63,62 @@ impl ParseOptions {
         self.on_malformed_record = policy;
         self
     }
+
+    /// Enables or disables reference-integrity diagnostics.
+    ///
+    /// When enabled, every data record whose instance id was already defined
+    /// yields a [`DiagnosticKind::DuplicateId`], and every record referencing
+    /// an id that no record in the `DATA` section defines yields one
+    /// [`DiagnosticKind::DanglingReference`] per distinct missing id. Forward
+    /// references are legal (ISO 10303-21:2016 §11.2) and are only reported
+    /// if the target is still undefined at `ENDSEC`. Ids compare numerically,
+    /// so `#07` and `#7` name the same instance.
+    ///
+    /// Nothing is dropped or rewritten, so these diagnostics never make an
+    /// outcome lossy. The check keeps one entry per defined id, so memory is
+    /// linear in the number of records, including for [`crate::parse_events_with`].
+    #[must_use]
+    pub const fn check_references(mut self, enabled: bool) -> Self {
+        self.check_references = enabled;
+        self
+    }
 }
 
 /// Severity of a non-fatal parse diagnostic.
 ///
-/// Only [`Severity::Warning`] exists today: a diagnostic is emitted exactly
-/// when input was accepted but not fully represented. Fatal problems are
-/// returned as [`StepError`](crate::StepError) instead of being reported here.
+/// Only [`Severity::Warning`] exists today: every diagnostic describes input
+/// that was accepted. Fatal problems are returned as
+/// [`StepError`](crate::StepError) instead of being reported here.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Severity {
-    /// Input was recovered with loss.
+    /// Input was accepted, but is damaged or inconsistent.
     #[default]
     Warning,
+}
+
+/// What a [`Diagnostic`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DiagnosticKind {
+    /// A malformed data record was skipped under [`OnMalformed::Skip`]. The
+    /// only kind that loses input.
+    SkippedRecord,
+    /// A data record reuses an instance id defined earlier in the section.
+    /// ISO 10303-21:2016 §11.2 requires instance names to be unique. Both
+    /// records are kept; the diagnostic points at the later one.
+    DuplicateId,
+    /// A data record references an instance id that no record defines.
+    DanglingReference,
 }
 
 /// A non-fatal problem found while parsing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     severity: Severity,
+    kind: DiagnosticKind,
     span: Span,
+    instance: Option<InstanceId>,
     detail: String,
 }
 
@@ -85,8 +126,30 @@ impl Diagnostic {
     pub(crate) fn skipped_record(span: Span, detail: impl Into<String>) -> Self {
         Self {
             severity: Severity::Warning,
+            kind: DiagnosticKind::SkippedRecord,
             span,
+            instance: None,
             detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn duplicate_id(span: Span, id: InstanceId) -> Self {
+        Self {
+            severity: Severity::Warning,
+            kind: DiagnosticKind::DuplicateId,
+            span,
+            detail: format!("duplicate instance id {id}"),
+            instance: Some(id),
+        }
+    }
+
+    pub(crate) fn dangling_reference(span: Span, id: InstanceId) -> Self {
+        Self {
+            severity: Severity::Warning,
+            kind: DiagnosticKind::DanglingReference,
+            span,
+            detail: format!("reference to undefined instance {id}"),
+            instance: Some(id),
         }
     }
 
@@ -96,10 +159,27 @@ impl Diagnostic {
         self.severity
     }
 
+    /// What the diagnostic reports.
+    #[must_use]
+    pub const fn kind(&self) -> DiagnosticKind {
+        self.kind
+    }
+
+    /// The instance id at fault. For a duplicate it is the later record's id
+    /// as written; for a dangling reference it is the missing id in canonical
+    /// form (leading zeros removed, since `#07` and `#7` are the same
+    /// instance). `None` for a skipped record.
+    #[must_use]
+    pub const fn instance(&self) -> Option<&InstanceId> {
+        self.instance.as_ref()
+    }
+
     /// Byte range of the original input that the diagnostic covers.
     ///
     /// For a skipped record this is the whole discarded range, so a consumer
-    /// can quote the exact bytes that were dropped.
+    /// can quote the exact bytes that were dropped. For a reference defect it
+    /// is the offending record: the later duplicate, or the record holding the
+    /// dangling reference.
     #[must_use]
     pub const fn span(&self) -> Span {
         self.span
@@ -132,9 +212,15 @@ pub struct ParseOutcome {
 }
 
 impl ParseOutcome {
-    /// Whether anything was dropped while reading.
+    /// Whether nothing was dropped while reading.
+    ///
+    /// Only [`DiagnosticKind::SkippedRecord`] loses input. Reference
+    /// defects are reported but keep every record, so they do not count.
     #[must_use]
     pub fn is_lossless(&self) -> bool {
-        self.diagnostics.is_empty()
+        !self
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == DiagnosticKind::SkippedRecord)
     }
 }
