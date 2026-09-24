@@ -6,6 +6,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- Faster tokenizing, output unchanged: string bodies jump to the next `\` or
+  `'` instead of testing every byte for a print directive; whitespace is only
+  checked for a directive or comment when it is followed by `\` or `/`;
+  numbers, ids and names without ignored controls are borrowed from the input
+  without a second scan. On six real IFC exports (18-109 MB) the tokenizer
+  runs at 407-541 MB/s, up from 183-317, and a full `parse` is 1.1-1.4x
+  faster. Every token, record, diagnostic and error span is identical to
+  0.6.2 on 800 real and 3,000 generated files.
+- New dependency: `memchr` (vectorized byte search).
+
 ## [0.6.2] - 2026-09-24
 
 ### Added

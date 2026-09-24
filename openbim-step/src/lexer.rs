@@ -45,6 +45,10 @@ pub struct Lexer<'a> {
     input: &'a [u8],
     position: usize,
     finished: bool,
+    /// Whether an ignored control was consumed since the current number
+    /// token started. Lets [`Self::number_bytes`] borrow the lexeme without
+    /// rescanning it; only `lex_number` resets and reads it.
+    dirty: bool,
 }
 
 fn is_valid_binary(body: &[u8]) -> bool {
@@ -76,6 +80,10 @@ fn strip_print_directives(bytes: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
 }
 
 fn strip_text_print_directives(bytes: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
+    // Every directive and escape starts with `\`; most string bodies have none.
+    if memchr::memchr(b'\\', &bytes).is_none() {
+        return bytes;
+    }
     let mut stripped: Option<Vec<u8>> = None;
     let mut position = 0;
     while position < bytes.len() {
@@ -109,6 +117,7 @@ impl<'a> Lexer<'a> {
             input,
             position: 0,
             finished: false,
+            dirty: false,
         }
     }
 
@@ -135,6 +144,36 @@ impl<'a> Lexer<'a> {
             .is_some_and(|byte| is_ignored_control(*byte))
         {
             self.position += 1;
+            self.dirty = true;
+        }
+    }
+
+    /// Consumes a run of digits, with ignored controls allowed anywhere in
+    /// it, and returns how many digits it held. Stops at the first byte that
+    /// is neither, so it consumes exactly what alternating
+    /// `skip_ignored_controls` + one-digit steps would.
+    fn digits(&mut self) -> usize {
+        let mut count = 0;
+        while let Some(&byte) = self.input.get(self.position) {
+            if byte.is_ascii_digit() {
+                count += 1;
+            } else if is_ignored_control(byte) {
+                self.dirty = true;
+            } else {
+                break;
+            }
+            self.position += 1;
+        }
+        count
+    }
+
+    /// The number lexeme `start..self.position` with ignored controls
+    /// removed. Borrows unless `digits`/`skip_ignored_controls` saw one.
+    fn number_bytes(&self, start: usize) -> Cow<'a, [u8]> {
+        if self.dirty {
+            self.token_bytes(start, self.position)
+        } else {
+            Cow::Borrowed(&self.input[start..self.position])
         }
     }
 
@@ -265,6 +304,12 @@ impl<'a> Lexer<'a> {
             {
                 self.position += 1;
             }
+            // The whitespace loop above already consumed every ignored
+            // control, so a directive (`\N\`, `\F\`) or comment (`/*`) can
+            // only start right here, at `\` or `/`. Anything else is a token.
+            if !matches!(self.input.get(self.position), Some(b'\\' | b'/')) {
+                return Ok(());
+            }
             if let Some(end) = self
                 .match_ignoring_controls(self.position, b"\\N\\")
                 .or_else(|| self.match_ignoring_controls(self.position, b"\\F\\"))
@@ -303,31 +348,28 @@ impl<'a> Lexer<'a> {
     fn lex_id(&mut self, start: usize) -> Result<Token<'a>, StepError> {
         self.position += 1;
         self.skip_ignored_controls();
+        // Controls before the first digit are outside the lexeme.
+        self.dirty = false;
         let digits = self.position;
-        let mut saw_digit = false;
-        while let Some(&byte) = self.input.get(self.position) {
-            if is_ignored_control(byte) {
-                self.position += 1;
-            } else if byte.is_ascii_digit() {
-                saw_digit = true;
-                self.position += 1;
-            } else {
-                break;
-            }
-        }
-        if !saw_digit {
+        if self.digits() == 0 {
             return Err(StepError::syntax(
                 Span::new(start, self.position),
                 "expected digits after '#'",
             ));
         }
-        Ok(Token::Id(self.token_bytes(digits, self.position)))
+        Ok(Token::Id(self.number_bytes(digits)))
     }
 
     fn lex_text(&mut self, start: usize) -> Result<Token<'a>, StepError> {
         self.position += 1;
         let body_start = self.position;
-        while let Some(&byte) = self.input.get(self.position) {
+        // Only `\` and `'` can change how a string body is read. Every other
+        // byte -- ignored controls included, because the matchers below skip
+        // those themselves before looking for `\` -- only advances by one, so
+        // the scan jumps straight to the next candidate.
+        while let Some(offset) = memchr::memchr2(b'\\', b'\'', &self.input[self.position..]) {
+            self.position += offset;
+            let byte = self.input[self.position];
             // `\\` is one escaped backslash. Consume it whole so its second
             // byte cannot open a `\S\` page escape below.
             if let Some(end) = self.match_ignoring_text_controls(self.position, br"\\") {
@@ -356,6 +398,7 @@ impl<'a> Lexer<'a> {
             }
             self.position += 1;
         }
+        self.position = self.input.len();
         Err(StepError::syntax(
             Span::new(start, self.position),
             "unterminated string literal",
@@ -418,17 +461,22 @@ impl<'a> Lexer<'a> {
 
     fn lex_name(&mut self) -> Token<'a> {
         let start = self.position;
+        let mut dirty = false;
         while let Some(&byte) = self.input.get(self.position) {
-            if is_ignored_control(byte)
-                || byte.is_ascii_alphanumeric()
-                || matches!(byte, b'_' | b'-')
-            {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
+                self.position += 1;
+            } else if is_ignored_control(byte) {
+                dirty = true;
                 self.position += 1;
             } else {
                 break;
             }
         }
-        Token::Name(self.token_bytes(start, self.position))
+        Token::Name(if dirty {
+            self.token_bytes(start, self.position)
+        } else {
+            Cow::Borrowed(&self.input[start..self.position])
+        })
     }
 
     fn lex_user_defined_name(&mut self, start: usize) -> Result<Token<'a>, StepError> {
@@ -463,49 +511,25 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_number(&mut self, start: usize) -> Result<Token<'a>, StepError> {
+        // Ignored controls may appear anywhere inside a number and are
+        // dropped from the lexeme. `dirty` records whether any was seen, so
+        // the common clean number is borrowed without a second scan.
+        self.dirty = false;
         if matches!(self.input.get(self.position), Some(b'+' | b'-')) {
             self.position += 1;
-            self.skip_ignored_controls();
         }
-        let mut integer_digits = 0;
-        loop {
-            self.skip_ignored_controls();
-            if self
-                .input
-                .get(self.position)
-                .is_some_and(u8::is_ascii_digit)
-            {
-                integer_digits += 1;
-                self.position += 1;
-            } else {
-                break;
-            }
-        }
-        if integer_digits == 0 {
+        if self.digits() == 0 {
             return Err(StepError::syntax(
                 Span::new(start, self.position),
                 "number has no leading digits",
             ));
         }
-        self.skip_ignored_controls();
         let mut real = false;
         if self.input.get(self.position) == Some(&b'.') {
             real = true;
             self.position += 1;
-            loop {
-                self.skip_ignored_controls();
-                if self
-                    .input
-                    .get(self.position)
-                    .is_some_and(u8::is_ascii_digit)
-                {
-                    self.position += 1;
-                } else {
-                    break;
-                }
-            }
+            self.digits();
         }
-        self.skip_ignored_controls();
         if matches!(self.input.get(self.position), Some(b'e' | b'E')) {
             if !real {
                 return Err(StepError::syntax(
@@ -517,30 +541,15 @@ impl<'a> Lexer<'a> {
             self.skip_ignored_controls();
             if matches!(self.input.get(self.position), Some(b'+' | b'-')) {
                 self.position += 1;
-                self.skip_ignored_controls();
             }
-            let mut exponent_digits = 0;
-            loop {
-                self.skip_ignored_controls();
-                if self
-                    .input
-                    .get(self.position)
-                    .is_some_and(u8::is_ascii_digit)
-                {
-                    exponent_digits += 1;
-                    self.position += 1;
-                } else {
-                    break;
-                }
-            }
-            if exponent_digits == 0 {
+            if self.digits() == 0 {
                 return Err(StepError::syntax(
                     Span::new(start, self.position),
                     "real exponent has no digits",
                 ));
             }
         }
-        let text = self.token_bytes(start, self.position);
+        let text = self.number_bytes(start);
         Ok(if real {
             Token::Real(text)
         } else {

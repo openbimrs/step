@@ -12,6 +12,7 @@ categories = ["encoding", "parser-implementations"]
 
 [dependencies]
 encoding_rs = "0.8.35"
+memchr = "2.7"
 
 [lints]
 workspace = true
