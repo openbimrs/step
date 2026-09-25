@@ -32,21 +32,29 @@ impl InstanceId {
     /// Creates an identifier from non-empty ASCII decimal digits.
     #[must_use]
     pub fn new(value: &str) -> Option<Self> {
-        (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        Self::from_ascii_digits(value.as_bytes())
+    }
+
+    /// [`Self::new`] over bytes, for the parser: the lexer hands ids over as
+    /// bytes, and checking digits directly skips a separate UTF-8 pass.
+    pub(crate) fn from_ascii_digits(value: &[u8]) -> Option<Self> {
+        (!value.is_empty() && value.iter().all(u8::is_ascii_digit))
             .then(|| Self::from_digits(value))
     }
 
-    /// Stores already-validated digits.
-    fn from_digits(value: &str) -> Self {
+    /// Stores already-validated ASCII digits.
+    fn from_digits(value: &[u8]) -> Self {
         if value.len() <= INLINE_DIGITS {
             let mut bytes = [0; INLINE_DIGITS];
-            bytes[..value.len()].copy_from_slice(value.as_bytes());
+            bytes[..value.len()].copy_from_slice(value);
             Self(Digits::Inline {
                 len: u8::try_from(value.len()).expect("INLINE_DIGITS fits in u8"),
                 bytes,
             })
         } else {
-            Self(Digits::Heap(value.into()))
+            // ASCII digits are valid UTF-8, so this cannot fail.
+            let text = std::str::from_utf8(value).expect("ASCII digits are UTF-8");
+            Self(Digits::Heap(text.into()))
         }
     }
 
@@ -101,7 +109,7 @@ impl fmt::Debug for InstanceId {
 
 impl From<u64> for InstanceId {
     fn from(value: u64) -> Self {
-        Self::from_digits(&value.to_string())
+        Self::from_digits(value.to_string().as_bytes())
     }
 }
 

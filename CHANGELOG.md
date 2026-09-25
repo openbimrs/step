@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- Faster tokenizer, same output. Per-byte loops use a byte-class table
+  instead of range compares, and the per-token lexers are forced inline into
+  `Lexer::next_spanned`, which removes a copy of every token result through
+  the stack. Borrowed events validate names and numbers with `str::from_utf8`
+  before falling back to the lossy conversion, and instance ids are built
+  from the lexer's bytes without a separate UTF-8 pass. Measured against
+  0.7.0 on four real IFC files (user-space instructions; the build VM was
+  under load, so cycles are indicative): tokenizing -18..-35% instructions
+  and -41..-58% cycles; `parse_events_borrowed` -8..-11% instructions and
+  -6..-16% cycles. The full IFC model read is -6..-8% instructions: the
+  tokenizer is now about a quarter of it.
+
 ## [0.7.0] - 2026-09-24
 
 ### Added

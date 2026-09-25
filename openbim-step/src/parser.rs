@@ -209,7 +209,14 @@ impl<'a> Text<'a> for Cow<'a, str> {
 /// owned API.
 fn borrowed_str(bytes: Cow<'_, [u8]>) -> Cow<'_, str> {
     match bytes {
-        Cow::Borrowed(bytes) => String::from_utf8_lossy(bytes),
+        // `from_utf8` first: names, numbers and ids are ASCII by
+        // construction, and its validation is much cheaper than the chunked
+        // walk `from_utf8_lossy` does before it can return a borrow. The
+        // result is identical: lossy conversion of valid UTF-8 borrows it.
+        Cow::Borrowed(bytes) => match std::str::from_utf8(bytes) {
+            Ok(text) => Cow::Borrowed(text),
+            Err(_) => String::from_utf8_lossy(bytes),
+        },
         Cow::Owned(bytes) => Cow::Owned(lexeme_string(Cow::Owned(bytes))),
     }
 }
@@ -543,8 +550,7 @@ impl<'a> Parser<'a> {
         };
         self.expect_semicolon("after data record")?;
         Ok(DataRecord {
-            id: InstanceId::new(std::str::from_utf8(id).expect("instance digits are ASCII"))
-                .expect("lexer validates instance ids"),
+            id: InstanceId::from_ascii_digits(id).expect("lexer validates instance ids"),
             records,
         })
     }
@@ -759,8 +765,7 @@ impl<'a> Parser<'a> {
             Token::Dollar => Ok(Parameter::Null),
             Token::Star => Ok(Parameter::Derived),
             Token::Id(id) => Ok(Parameter::Ref(
-                InstanceId::new(std::str::from_utf8(&id).expect("instance digits are ASCII"))
-                    .expect("lexer validates instance ids"),
+                InstanceId::from_ascii_digits(&id).expect("lexer validates instance ids"),
             )),
             Token::Integer(value) => Ok(Parameter::Integer(S::lexeme(value))),
             Token::Real(value) => Ok(Parameter::Real(S::lexeme(value))),

@@ -40,6 +40,15 @@ pub enum Token<'a> {
 }
 
 /// Streaming tokenizer over a byte slice.
+///
+/// Performance note: the per-token helpers (`lex_id`, `lex_name`,
+/// `lex_number`, ...) are `#[inline(always)]` into `next_spanned`. Out of
+/// line, each returns its `Result<Token>` through a stack slot that
+/// `next_spanned` then copies into its own result -- about 20% of lexing
+/// cycles on real IFC files. Plain `#[inline]` is not enough: LLVM keeps
+/// them out of line and the copy returns (measured with `perf`, 0.7.x).
+/// The byte-class table (`CLASS`) replaces chains of range compares in the
+/// per-byte loops.
 #[derive(Debug, Clone)]
 pub struct Lexer<'a> {
     input: &'a [u8],
@@ -57,6 +66,51 @@ fn is_valid_binary(body: &[u8]) -> bool {
 
 const fn is_ignored_control(byte: u8) -> bool {
     matches!(byte, b'\t' | b'\n' | b'\r' | 0x0c)
+}
+
+// Byte classes, one table lookup instead of a chain of range compares in
+// the per-byte loops. A byte may be in several classes.
+/// ASCII whitespace as `u8::is_ascii_whitespace` defines it.
+const WHITESPACE: u8 = 1;
+/// An ignored control (`is_ignored_control`).
+const CONTROL: u8 = 2;
+/// `0-9`.
+const DIGIT: u8 = 4;
+/// Continues a bare name: ASCII alphanumeric, `_` or `-`.
+const NAME: u8 = 8;
+
+const fn byte_classes() -> [u8; 256] {
+    let mut table = [0u8; 256];
+    let mut b: u8 = 0;
+    loop {
+        let mut class = 0;
+        if b.is_ascii_whitespace() {
+            class |= WHITESPACE;
+        }
+        if is_ignored_control(b) {
+            class |= CONTROL;
+        }
+        if b.is_ascii_digit() {
+            class |= DIGIT;
+        }
+        if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+            class |= NAME;
+        }
+        table[b as usize] = class;
+        if b == u8::MAX {
+            break;
+        }
+        b += 1;
+    }
+    table
+}
+
+static CLASS: [u8; 256] = byte_classes();
+
+#[inline(always)]
+#[allow(clippy::inline_always, reason = "measured, see the note on `Lexer`")]
+fn class(byte: u8) -> u8 {
+    CLASS[byte as usize]
 }
 
 fn strip_print_directives(bytes: Cow<'_, [u8]>) -> Cow<'_, [u8]> {
@@ -152,12 +206,15 @@ impl<'a> Lexer<'a> {
     /// it, and returns how many digits it held. Stops at the first byte that
     /// is neither, so it consumes exactly what alternating
     /// `skip_ignored_controls` + one-digit steps would.
+    #[inline(always)]
+    #[allow(clippy::inline_always, reason = "measured, see the note on `Lexer`")]
     fn digits(&mut self) -> usize {
         let mut count = 0;
         while let Some(&byte) = self.input.get(self.position) {
-            if byte.is_ascii_digit() {
+            let class = class(byte);
+            if class & DIGIT != 0 {
                 count += 1;
-            } else if is_ignored_control(byte) {
+            } else if class & CONTROL != 0 {
                 self.dirty = true;
             } else {
                 break;
@@ -242,6 +299,7 @@ impl<'a> Lexer<'a> {
     ///
     /// Returns a syntax diagnostic for malformed literals, comments, numbers,
     /// or bytes that are not STEP punctuation.
+    #[inline]
     pub fn next_spanned(&mut self) -> Result<Option<Spanned<Token<'a>>>, StepError> {
         if self.finished {
             return Ok(None);
@@ -292,6 +350,7 @@ impl<'a> Lexer<'a> {
         self.next_spanned()
     }
 
+    #[inline]
     fn skip_trivia(&mut self) -> Result<(), StepError> {
         if self.position == 0 && self.input.starts_with(&[0xef, 0xbb, 0xbf]) {
             self.position = 3;
@@ -300,7 +359,7 @@ impl<'a> Lexer<'a> {
             while self
                 .input
                 .get(self.position)
-                .is_some_and(u8::is_ascii_whitespace)
+                .is_some_and(|byte| class(*byte) & WHITESPACE != 0)
             {
                 self.position += 1;
             }
@@ -340,11 +399,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    #[inline(always)]
+    #[allow(clippy::inline_always, reason = "measured, see the note on `Lexer`")]
     fn single(&mut self, token: Token<'a>) -> Token<'a> {
         self.position += 1;
         token
     }
 
+    #[inline(always)]
+    #[allow(clippy::inline_always, reason = "measured, see the note on `Lexer`")]
     fn lex_id(&mut self, start: usize) -> Result<Token<'a>, StepError> {
         self.position += 1;
         self.skip_ignored_controls();
@@ -428,6 +491,8 @@ impl<'a> Lexer<'a> {
         ))
     }
 
+    #[inline(always)]
+    #[allow(clippy::inline_always, reason = "measured, see the note on `Lexer`")]
     fn lex_keyword(&mut self, start: usize) -> Result<Token<'a>, StepError> {
         self.position += 1;
         let body_start = self.position;
@@ -459,13 +524,16 @@ impl<'a> Lexer<'a> {
         ))
     }
 
+    #[inline(always)]
+    #[allow(clippy::inline_always, reason = "measured, see the note on `Lexer`")]
     fn lex_name(&mut self) -> Token<'a> {
         let start = self.position;
         let mut dirty = false;
         while let Some(&byte) = self.input.get(self.position) {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-') {
+            let class = class(byte);
+            if class & NAME != 0 {
                 self.position += 1;
-            } else if is_ignored_control(byte) {
+            } else if class & CONTROL != 0 {
                 dirty = true;
                 self.position += 1;
             } else {
@@ -510,6 +578,8 @@ impl<'a> Lexer<'a> {
         Ok(Token::Name(self.token_bytes(start, self.position)))
     }
 
+    #[inline(always)]
+    #[allow(clippy::inline_always, reason = "measured, see the note on `Lexer`")]
     fn lex_number(&mut self, start: usize) -> Result<Token<'a>, StepError> {
         // Ignored controls may appear anywhere inside a number and are
         // dropped from the lexeme. `dirty` records whether any was seen, so
