@@ -6,6 +6,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+The owned model is reshaped to allocate less; parse output is unchanged in
+content (canonical dumps identical to 0.8.0 on 4,316 files, strict and
+recovering, writer output included). On three files, owned `parse` against
+0.8.0 (user cycles, drop included): peak memory -28% (109 MB Revit IFC,
+600 -> 431 MB), -34% (IFC4X3 with large coordinate lists), -32% (97 MB AP214);
+cycles -23%, -18%, -30%. Heap allocations for the Revit model 7.5 M -> 2.6 M.
+
+- `Str` is the owned model's string and the new default for every `S`
+  (`Exchange`, `DataRecord`, `Record`, `HeaderRecord`, `Parameter`,
+  `Event`, `EventSink`), replacing `String`. Values of up to 22 bytes --
+  nearly every number, GUID and entity name -- are stored inline without an
+  allocation; longer ones are one shared `Arc<str>`, and `parse` allocates
+  each distinct long name (record, typed-value and enumeration names) once
+  per parse and shares it. `Str` derefs to `str`, compares equal to `&str`,
+  and converts from `&str`, `String` and `Arc<str>`. The borrowed APIs keep
+  `Cow<'a, str>` and do no interning.
+- `DataRecord { id, records: Vec<Record> }` is now
+  `DataRecord { id, instance: Instance }` with
+  `Instance::Simple(Record)` / `Instance::Complex(Box<[Record]>)`: a simple
+  instance holds its record inline instead of in a one-element `Vec`.
+  `DataRecord::records()` returns the records as a slice for either shape;
+  `as_simple()` now returns `Some` only for the simple form. New
+  constructor `DataRecord::complex`.
+- A complex instance stays complex: `#1=(A(1));` now writes back as
+  written, where the writer used to turn a one-record complex instance into
+  `#1=A(1);`. An empty `Instance::Complex` is refused by the writer.
+- Parameter lists are `Box<[Parameter]>` instead of `Vec<Parameter>`
+  (`Record::parameters`, `HeaderRecord::parameters`, `Parameter::List`): a
+  list never grows after parsing, so it carries no capacity. Constructors
+  (`Record::new`, `DataRecord::simple`) accept anything `Into<Box<[_]>>`,
+  including a `Vec` or an array.
+
+Migrating: read `record.records()` instead of `record.records`; build text
+with `Str::from(..)` or `.into()`; consume a boxed list by value with
+`.into_vec()` (edition 2021's `.into_iter()` on a `Box<[T]>` iterates by
+reference); compare names with `name == "IFCWALL"` or `&*name`.
+
 ## [0.8.0] - 2026-09-26
 
 ### Added

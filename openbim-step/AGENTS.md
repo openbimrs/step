@@ -6,6 +6,9 @@ Generic ISO 10303-21 physical-file and ISO 10303-11 EXPRESS language infrastruct
 
 - tokens, source spans, syntax diagnostics, and complete classic STEP string escaping;
 - arbitrary-precision instance IDs, records, parameters, headers, and exchange sections;
+- the owned model's shape (`Str`, `Instance`, boxed parameter lists). Its
+  content must not change with its representation: check any reshaping
+  with a canonical content dump against the last release, not `Debug`;
 - parser, deterministic writer, record partitioning, and incremental event sinks;
 - borrowed events (`parse_events_borrowed`) and the parallel parse
   (`src/parallel.rs`). Invariant for the parallel parse: its result equals

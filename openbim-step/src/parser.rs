@@ -5,19 +5,20 @@
 //! parse/write/reparse cycle.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use crate::escape;
 use crate::lexer::{Lexer, Token};
 use crate::recovery::{Diagnostic, OnMalformed, ParseOptions, ParseOutcome};
 use crate::references::ReferenceCheck;
 use crate::{
-    DataRecord, DataSection, Exchange, HeaderRecord, HeaderSection, InstanceId, Parameter, Record,
-    Span, Spanned, StepError,
+    DataRecord, DataSection, Exchange, HeaderRecord, HeaderSection, Instance, InstanceId,
+    Parameter, Record, Span, Spanned, StepError, Str,
 };
 
 /// A semantic parser event.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Event<S = String> {
+pub enum Event<S = Str> {
     /// Entered `HEADER;`.
     StartHeader,
     /// Parsed one header record.
@@ -33,7 +34,7 @@ pub enum Event<S = String> {
 }
 
 /// Consumer for parse events.
-pub trait EventSink<S = String> {
+pub trait EventSink<S = Str> {
     /// Receives one event. Events are delivered in source order.
     fn event(&mut self, event: Event<S>);
 }
@@ -162,34 +163,82 @@ pub fn parse_events_borrowed<'a>(
 
 /// How the parser turns lexemes into the caller's string type.
 ///
-/// `String` reproduces the owned API exactly (names upper-cased, lossy UTF-8).
-/// `Cow<'a, str>` borrows from the input whenever the bytes are valid UTF-8
-/// and need no rewriting, and keeps name case as written.
+/// [`Str`] is the owned API: names upper-cased, lossy UTF-8, short values
+/// inline, and every distinct long name allocated once per parse and shared. `Cow<'a, str>` borrows
+/// from the input whenever the bytes are valid UTF-8 and need no rewriting,
+/// and keeps name case as written.
 trait Text<'a>: Sized {
+    /// Per-parse state for names.
+    type Names;
+    /// Name state for a whole-file parse.
+    fn names() -> Self::Names;
+    /// Name state for decoding one record, where a lookup table would cost
+    /// more than it saves.
+    fn record_names() -> Self::Names;
     /// A record, typed-parameter or enumeration name.
-    fn name(bytes: Cow<'a, [u8]>) -> Self;
+    fn name(bytes: Cow<'a, [u8]>, names: &mut Self::Names) -> Self;
     /// A number or binary lexeme.
     fn lexeme(bytes: Cow<'a, [u8]>) -> Self;
     /// An escaped string body.
     fn text(raw: Cow<'a, [u8]>) -> Self;
 }
 
-impl<'a> Text<'a> for String {
-    fn name(bytes: Cow<'a, [u8]>) -> Self {
-        upper(&bytes)
+/// Shared upper-cased long names by their bytes as lexed. `None` disables
+/// it. Short names are stored inline and never looked up.
+///
+/// The keys come from the input, so the table keeps std's randomly keyed
+/// hasher: a fixed fast hash would let a crafted file force collisions.
+pub(crate) type NameTable = Option<HashMap<Box<[u8]>, Str>>;
+
+/// Names up to this length fit inline in a [`Str`], so sharing them saves
+/// nothing.
+const INLINE_NAME: usize = 22;
+
+impl<'a> Text<'a> for Str {
+    type Names = NameTable;
+
+    fn names() -> Self::Names {
+        Some(HashMap::new())
+    }
+
+    fn record_names() -> Self::Names {
+        None
+    }
+
+    fn name(bytes: Cow<'a, [u8]>, names: &mut Self::Names) -> Self {
+        let Some(table) = names.as_mut().filter(|_| bytes.len() > INLINE_NAME) else {
+            return upper_str(&bytes);
+        };
+        if let Some(name) = table.get(&*bytes) {
+            return name.clone();
+        }
+        let name = upper_str(&bytes);
+        table.insert(bytes.into_owned().into_boxed_slice(), name.clone());
+        name
     }
 
     fn lexeme(bytes: Cow<'a, [u8]>) -> Self {
-        lexeme_string(bytes)
+        Str::from(&*borrowed_str(bytes))
     }
 
     fn text(raw: Cow<'a, [u8]>) -> Self {
-        escape::decode(&raw)
+        // Without a quote or backslash there is nothing to decode: the text
+        // is the body itself, copied once instead of through a `String`.
+        if memchr::memchr2(b'\\', b'\'', &raw).is_none() {
+            return Str::from(&*borrowed_str(raw));
+        }
+        Str::from(escape::decode(&raw))
     }
 }
 
 impl<'a> Text<'a> for Cow<'a, str> {
-    fn name(bytes: Cow<'a, [u8]>) -> Self {
+    type Names = ();
+
+    fn names() -> Self::Names {}
+
+    fn record_names() -> Self::Names {}
+
+    fn name(bytes: Cow<'a, [u8]>, (): &mut Self::Names) -> Self {
         borrowed_str(bytes)
     }
 
@@ -236,7 +285,7 @@ enum Phase {
     Done,
 }
 
-struct Parser<'a, S> {
+struct Parser<'a, S: Text<'a>> {
     input: &'a [u8],
     lexer: Lexer<'a>,
     lookahead: Option<Spanned<Token<'a>>>,
@@ -258,6 +307,8 @@ struct Parser<'a, S> {
     /// of exactly its length, so no list carries growth slack or pays for
     /// regrowth, and the stack's own buffer is reused for the whole parse.
     scratch: Vec<Parameter<S>>,
+    /// Name state; see [`Text::names`].
+    names: S::Names,
 }
 
 /// Where a restricted parse ends. The parallel driver parses the header up
@@ -360,6 +411,7 @@ fn parse_record_at<'a, S: Text<'a>>(
     // One allocation that fits the parameters of almost every record,
     // instead of regrowing the stack from empty for each decoded record.
     parser.scratch = Vec::with_capacity(RECORD_SCRATCH);
+    parser.names = S::record_names();
     parser.phase = Phase::Data;
     parser.lexer.resume_at(span.start);
     parser.last_end = span.start;
@@ -409,6 +461,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
             stopped: None,
             record_spans: None,
             scratch: Vec::new(),
+            names: S::names(),
         }
     }
 
@@ -519,7 +572,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                     let parameters = self.parse_arguments()?;
                     self.expect_semicolon("after header record")?;
                     sink.event(Event::HeaderRecord(HeaderRecord {
-                        name: S::name(name),
+                        name: S::name(name, &mut self.names),
                         parameters,
                     }));
                 }
@@ -565,8 +618,8 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
         let record_token = self.next()?.ok_or_else(|| {
             StepError::syntax(Span::new(id_span.end, id_span.end), "missing record body")
         })?;
-        let records = match record_token.value {
-            Token::Name(name) => vec![self.parse_named_record(name)?],
+        let instance = match record_token.value {
+            Token::Name(name) => Instance::Simple(self.parse_named_record(name)?),
             Token::OpenParen => {
                 let mut records = Vec::new();
                 loop {
@@ -602,7 +655,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                         "complex instance must contain a record",
                     ));
                 }
-                records
+                Instance::Complex(records.into_boxed_slice())
             }
             _ => {
                 return Err(StepError::syntax(
@@ -614,7 +667,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
         self.expect_semicolon("after data record")?;
         Ok(DataRecord {
             id: InstanceId::from_ascii_digits(id).expect("lexer validates instance ids"),
-            records,
+            instance,
         })
     }
 
@@ -762,12 +815,12 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
 
     fn parse_named_record(&mut self, name: Cow<'a, [u8]>) -> Result<Record<S>, StepError> {
         Ok(Record {
-            name: S::name(name),
+            name: S::name(name, &mut self.names),
             parameters: self.parse_arguments()?,
         })
     }
 
-    fn parse_arguments(&mut self) -> Result<Vec<Parameter<S>>, StepError> {
+    fn parse_arguments(&mut self) -> Result<Box<[Parameter<S>]>, StepError> {
         let token = self
             .next()?
             .ok_or_else(|| StepError::syntax(self.eof_span(), "expected '(' after record name"))?;
@@ -780,10 +833,11 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
         self.parse_parameter_list(0)
     }
 
-    /// Parses a list after its `(` into a `Vec` of exactly its length.
-    fn parse_parameter_list(&mut self, depth: usize) -> Result<Vec<Parameter<S>>, StepError> {
+    /// Parses a list after its `(` into a slice of exactly its length.
+    fn parse_parameter_list(&mut self, depth: usize) -> Result<Box<[Parameter<S>]>, StepError> {
         let base = self.parse_list_onto_scratch(depth)?;
-        // `Drain` knows its exact length, so this allocates once, exactly.
+        // `Drain` knows its exact length, so this allocates once, exactly,
+        // and the boxed slice keeps that allocation as is.
         Ok(self.scratch.drain(base..).collect())
     }
 
@@ -858,7 +912,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
             Token::Keyword(keyword) if keyword.eq_ignore_ascii_case(b"U") => {
                 Ok(Parameter::LogicalUnknown)
             }
-            Token::Keyword(keyword) => Ok(Parameter::Enum(S::name(keyword))),
+            Token::Keyword(keyword) => Ok(Parameter::Enum(S::name(keyword, &mut self.names))),
             Token::OpenParen => Ok(Parameter::List(self.parse_parameter_list(depth + 1)?)),
             Token::Name(name) => {
                 let Some(next) = self.peek()? else {
@@ -883,7 +937,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                     Box::new(Parameter::List(self.scratch.drain(base..).collect()))
                 };
                 Ok(Parameter::Typed {
-                    type_name: S::name(name),
+                    type_name: S::name(name, &mut self.names),
                     value,
                 })
             }
@@ -946,13 +1000,19 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
     }
 }
 
-fn upper(bytes: &[u8]) -> String {
-    // Names reach here from the lexer, which admits only ASCII, so the lossy
-    // conversion never replaces anything; the fast path skips its scan.
-    match std::str::from_utf8(bytes) {
-        Ok(text) => text.to_ascii_uppercase(),
-        Err(_) => String::from_utf8_lossy(bytes).to_ascii_uppercase(),
+/// An upper-cased name, built without an intermediate `String`. Names reach
+/// here from the lexer, which admits only ASCII, so the lossy conversion
+/// never replaces anything.
+fn upper_str(bytes: &[u8]) -> Str {
+    let mut buffer = [0u8; 128];
+    if let Some(stack) = buffer.get_mut(..bytes.len()) {
+        stack.copy_from_slice(bytes);
+        stack.make_ascii_uppercase();
+        if let Ok(text) = std::str::from_utf8(stack) {
+            return Str::from(text);
+        }
     }
+    Str::from(String::from_utf8_lossy(bytes).to_ascii_uppercase())
 }
 
 /// A lexeme as an owned `String`, reusing an owned buffer instead of copying.

@@ -26,7 +26,7 @@ fn scan_decode(input: &[u8]) -> Result<Vec<DataRecord>, StepError> {
         assert_eq!(decoded.id, record.id, "scanned id differs from decoded id");
         let borrowed = decode_record_borrowed(input, record.span)?;
         assert_eq!(borrowed.id, decoded.id);
-        match (&record.name, decoded.records.as_slice()) {
+        match (&record.name, decoded.records()) {
             (Some(name), [simple]) => assert!(name.eq_ignore_ascii_case(&simple.name)),
             (None, _) => assert!(input[record.span.start..record.span.end].contains(&b'(')),
             (Some(_), _) => panic!("simple record name for a complex instance"),
@@ -268,12 +268,10 @@ fn check_pinned(cases: &[(&str, &[&str])]) {
     for (data, expected) in cases {
         let input = wrap(&format!("{data}\n"));
         let exchange = parse(&input).expect(data);
-        let expected: Vec<_> = expected
-            .iter()
-            .map(|text| Text((*text).to_owned()))
-            .collect();
+        let expected: Box<[_]> = expected.iter().map(|text| Text((*text).into())).collect();
         assert_eq!(
-            exchange.data.records[0].records[0].parameters, expected,
+            exchange.data.records[0].records()[0].parameters,
+            expected,
             "{data:?}"
         );
         assert_agrees(&input, data);

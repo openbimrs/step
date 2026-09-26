@@ -32,7 +32,7 @@ fn main() {
         .filter(|record| {
             record
                 .as_simple()
-                .is_some_and(|simple| simple.name == "IFCRELSPACEBOUNDARY")
+                .is_some_and(|simple| &*simple.name == "IFCRELSPACEBOUNDARY")
         })
         .count();
     println!("IfcRelSpaceBoundary: {boundaries}");

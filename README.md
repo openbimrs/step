@@ -7,6 +7,7 @@ Pure-Rust, schema-independent infrastructure for ISO 10303.
 - ISO 10303-21 tokens with source spans and diagnostics;
 - STEP string escaping, including legacy `\P` alphabet selection for `\S` escapes;
 - generic HEADER records, one DATA section, arbitrary-precision instance IDs, simple and complex records, user-defined keywords, and parameters;
+- a compact owned model: short strings inline, long names shared per parse, simple instances without a record list, parameter lists as boxed slices;
 - arbitrary-precision integer/real lexemes, validated binary syntax, and deterministic syntax-safe writing;
 - owning parser, record partitioning, and incrementally emitted event/sink parsing;
 - a lazy record index (`scan`) that frames every data record without decoding it, and `decode_record` to parse one record on demand;

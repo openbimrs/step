@@ -4,7 +4,9 @@
 
 use std::borrow::Cow;
 
-use openbim_step::{parse_events_borrowed, parse_events_with, Event, Parameter, ParseOptions};
+use openbim_step::{
+    parse_events_borrowed, parse_events_with, Event, Instance, Parameter, ParseOptions, Str,
+};
 
 const FILE: &[u8] = b"ISO-10303-21;
 HEADER;
@@ -65,7 +67,7 @@ fn owned_str<'v>(value: &'v Cow<'_, str>) -> Option<&'v str> {
 fn clean_values_are_borrowed_in_source_case() {
     let events = borrowed(FILE);
     let records = data(&events);
-    let wall = &records[0].records[0];
+    let wall = &records[0].records()[0];
     assert_eq!(borrowed_str(&wall.name), Some("IfcWall"));
     let p = &wall.parameters;
     assert!(matches!(&p[0], Parameter::Text(t) if borrowed_str(t) == Some("plain")));
@@ -83,7 +85,7 @@ fn clean_values_are_borrowed_in_source_case() {
 #[test]
 fn text_that_needs_decoding_is_owned_and_decoded() {
     let events = borrowed(FILE);
-    let p = &data(&events)[0].records[0].parameters;
+    let p = &data(&events)[0].records()[0].parameters;
     assert!(matches!(&p[1], Parameter::Text(t) if owned_str(t) == Some("it's")));
     assert!(matches!(&p[2], Parameter::Text(t) if owned_str(t) == Some("\u{e4}")));
 }
@@ -91,7 +93,7 @@ fn text_that_needs_decoding_is_owned_and_decoded() {
 #[test]
 fn values_interrupted_by_ignored_controls_are_owned_and_stripped() {
     let events = borrowed(FILE);
-    let second = &data(&events)[1].records[0];
+    let second = &data(&events)[1].records()[0];
     assert_eq!(owned_str(&second.name), Some("IFCWALL"));
     assert!(matches!(&second.parameters[0], Parameter::Integer(v) if owned_str(v) == Some("12")));
     // A control inside a string body is dropped from the lexeme, so the
@@ -104,21 +106,29 @@ fn values_interrupted_by_ignored_controls_are_owned_and_stripped() {
 /// damaged and recovering inputs.
 #[test]
 fn borrowed_events_normalise_to_the_owned_events() {
-    fn param(p: Parameter<Cow<'_, str>>) -> Parameter<String> {
+    fn owned(text: Cow<'_, str>) -> Str {
+        Str::from(text.into_owned())
+    }
+    fn upper(text: &str) -> Str {
+        Str::from(text.to_ascii_uppercase())
+    }
+    fn param(p: Parameter<Cow<'_, str>>) -> Parameter {
         match p {
             Parameter::Null => Parameter::Null,
             Parameter::Derived => Parameter::Derived,
             Parameter::Bool(b) => Parameter::Bool(b),
             Parameter::LogicalUnknown => Parameter::LogicalUnknown,
-            Parameter::Integer(v) => Parameter::Integer(v.into_owned()),
-            Parameter::Real(v) => Parameter::Real(v.into_owned()),
-            Parameter::Text(v) => Parameter::Text(v.into_owned()),
-            Parameter::Binary(v) => Parameter::Binary(v.into_owned()),
-            Parameter::Enum(v) => Parameter::Enum(v.to_ascii_uppercase()),
+            Parameter::Integer(v) => Parameter::Integer(owned(v)),
+            Parameter::Real(v) => Parameter::Real(owned(v)),
+            Parameter::Text(v) => Parameter::Text(owned(v)),
+            Parameter::Binary(v) => Parameter::Binary(owned(v)),
+            Parameter::Enum(v) => Parameter::Enum(upper(&v)),
             Parameter::Ref(id) => Parameter::Ref(id),
-            Parameter::List(items) => Parameter::List(items.into_iter().map(param).collect()),
+            Parameter::List(items) => {
+                Parameter::List(items.into_vec().into_iter().map(param).collect())
+            }
             Parameter::Typed { type_name, value } => Parameter::Typed {
-                type_name: type_name.to_ascii_uppercase(),
+                type_name: upper(&type_name),
                 value: Box::new(param(*value)),
             },
         }
@@ -130,20 +140,30 @@ fn borrowed_events_normalise_to_the_owned_events() {
             Event::StartData => Event::StartData,
             Event::EndData => Event::EndData,
             Event::HeaderRecord(h) => Event::HeaderRecord(openbim_step::HeaderRecord {
-                name: h.name.to_ascii_uppercase(),
-                parameters: h.parameters.into_iter().map(param).collect(),
+                name: upper(&h.name),
+                parameters: h.parameters.into_vec().into_iter().map(param).collect(),
             }),
-            Event::DataRecord(d) => Event::DataRecord(openbim_step::DataRecord {
-                id: d.id,
-                records: d
-                    .records
-                    .into_iter()
-                    .map(|r| openbim_step::Record {
-                        name: r.name.to_ascii_uppercase(),
-                        parameters: r.parameters.into_iter().map(param).collect(),
-                    })
-                    .collect(),
-            }),
+            Event::DataRecord(d) => {
+                let record = |r: openbim_step::Record<Cow<'_, str>>| {
+                    openbim_step::Record::new(
+                        upper(&r.name),
+                        r.parameters
+                            .into_vec()
+                            .into_iter()
+                            .map(param)
+                            .collect::<Vec<_>>(),
+                    )
+                };
+                Event::DataRecord(openbim_step::DataRecord {
+                    id: d.id,
+                    instance: match d.instance {
+                        Instance::Simple(r) => Instance::Simple(record(r)),
+                        Instance::Complex(rs) => {
+                            Instance::Complex(rs.into_vec().into_iter().map(record).collect())
+                        }
+                    },
+                })
+            }
         }
     }
     let damaged = b"ISO-10303-21;HEADER;FILE_DESCRIPTION((''),'2;1');\

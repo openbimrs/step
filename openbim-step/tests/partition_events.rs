@@ -76,7 +76,7 @@ impl EventSink for Collector {
     fn event(&mut self, event: Event) {
         match event {
             Event::StartHeader => self.transitions.push("start-header"),
-            Event::HeaderRecord(record) => self.header_names.push(record.name),
+            Event::HeaderRecord(record) => self.header_names.push(record.name.to_string()),
             Event::EndHeader => self.transitions.push("end-header"),
             Event::StartData => self.transitions.push("start-data"),
             Event::DataRecord(record) => self.data_ids.push(record.id),

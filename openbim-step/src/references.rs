@@ -102,7 +102,7 @@ impl ReferenceCheck {
             diagnostics.push(Diagnostic::duplicate_id(span, record.id.clone()));
         }
         let start = self.unresolved.len();
-        for component in &record.records {
+        for component in record.records() {
             for parameter in &component.parameters {
                 self.collect(parameter);
             }

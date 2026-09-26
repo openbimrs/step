@@ -5,7 +5,7 @@
 
 use crate::escape;
 use crate::lexer::{Lexer, Token};
-use crate::{Exchange, HeaderRecord, Parameter, Record};
+use crate::{Exchange, HeaderRecord, Instance, Parameter, Record};
 use std::io::{self, Write};
 
 /// Writes a complete physical file.
@@ -31,10 +31,14 @@ pub fn write<S: AsRef<str>, W: Write + ?Sized>(
     writeln!(output, "DATA;")?;
     for instance in &exchange.data.records {
         write!(output, "#{}=", instance.id.as_str())?;
-        match instance.records.as_slice() {
-            [] => return Err(invalid("data instance must contain a record")),
-            [record] => write_record(record, output)?,
-            records => {
+        match &instance.instance {
+            Instance::Simple(record) => write_record(record, output)?,
+            // Complex stays complex, even with one record: `#1=(A(1));`
+            // is written back as it was read.
+            Instance::Complex(records) if records.is_empty() => {
+                return Err(invalid("complex instance must contain a record"));
+            }
+            Instance::Complex(records) => {
                 write!(output, "(")?;
                 for record in records {
                     write_record(record, output)?;

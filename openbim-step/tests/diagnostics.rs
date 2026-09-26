@@ -36,7 +36,7 @@ fn parser_and_writer_reject_excessive_parameter_nesting() {
 
     let mut parameter: Parameter = Parameter::Null;
     for _ in 0..nesting {
-        parameter = Parameter::List(vec![parameter]);
+        parameter = Parameter::List(Box::new([parameter]));
     }
     let error =
         write_parameter(&parameter, &mut Vec::new()).expect_err("writer nesting must be bounded");

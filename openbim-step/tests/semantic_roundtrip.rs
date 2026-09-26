@@ -87,7 +87,7 @@ fn semantic_parse_write_reparse_preserves_all_records() {
     assert_eq!(exchange.data.records.len(), 2);
     assert_eq!(exchange.data.records[0].id, InstanceId::from(7_u64));
 
-    let values = &exchange.data.records[0].records[0].parameters;
+    let values = &exchange.data.records[0].records()[0].parameters;
     assert_eq!(values[0], Parameter::Null);
     assert_eq!(values[1], Parameter::Derived);
     assert_eq!(values[2], Parameter::Bool(true));
@@ -141,13 +141,13 @@ END-ISO-10303-21;
 ";
     let exchange = parse(input).unwrap();
     let instance = &exchange.data.records[0];
-    assert_eq!(instance.records.len(), 2);
+    assert_eq!(instance.records().len(), 2);
     assert_eq!(
-        instance.records[0].parameters[0],
+        instance.records()[0].parameters[0],
         Parameter::Integer("123456789012345678901234567890".into())
     );
     assert_eq!(
-        instance.records[1].parameters[0],
+        instance.records()[1].parameters[0],
         Parameter::Real("1.234567890123456789E+999".into())
     );
     let rendered = write_to_string(&exchange).unwrap();
@@ -201,7 +201,7 @@ fn writer_rejects_syntax_bearing_record_names() {
     let mut exchange = parse(SAMPLE).unwrap();
     exchange.data.records[0] = DataRecord::simple(
         InstanceId::from(7_u64),
-        "WIDGET);#999=INJECTED(".to_string(),
+        "WIDGET);#999=INJECTED(".into(),
         vec![Parameter::Null],
     );
     assert!(write_to_string(&exchange).is_err());

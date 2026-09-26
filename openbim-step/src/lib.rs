@@ -30,8 +30,8 @@ pub mod writer;
 pub use diagnostic::{Source, SourceLocation, Span, Spanned, StepError};
 pub use header::is_step_file;
 pub use model::{
-    DataRecord, DataSection, Exchange, HeaderRecord, HeaderSection, InstanceId, Parameter, Record,
-    StandardHeader,
+    DataRecord, DataSection, Exchange, HeaderRecord, HeaderSection, Instance, InstanceId,
+    Parameter, Record, StandardHeader, Str,
 };
 pub use parallel::parse_parallel_with;
 pub use parser::{

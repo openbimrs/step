@@ -245,14 +245,10 @@ fn the_specification_example_resolves_to_one_slot_per_part() {
     )
     .expect("parse");
     let record = &exchange.data.records[0];
-    let names: Vec<&str> = record
-        .records
-        .iter()
-        .map(|part| part.name.as_str())
-        .collect();
+    let names: Vec<&str> = record.records().iter().map(|part| &*part.name).collect();
     let layout = schema.resolve_complex(&names);
     assert!(layout.is_valid(), "{:?}", layout.issues());
-    for (part, written) in layout.parts().iter().zip(&record.records) {
+    for (part, written) in layout.parts().iter().zip(record.records()) {
         assert_eq!(
             part.slots().len(),
             written.parameters.len(),
@@ -286,12 +282,13 @@ fn every_complex_instance_in_real_ap214_files_resolves() {
     for file in ["linkrods.step", "screw.step"] {
         let bytes = std::fs::read(std::path::Path::new(&data).join(file)).expect("data readable");
         let exchange = parse(&bytes).expect("parse");
-        for record in exchange.data.records.iter().filter(|r| r.records.len() > 1) {
-            let names: Vec<&str> = record
-                .records
-                .iter()
-                .map(|part| part.name.as_str())
-                .collect();
+        for record in exchange
+            .data
+            .records
+            .iter()
+            .filter(|r| r.records().len() > 1)
+        {
+            let names: Vec<&str> = record.records().iter().map(|part| &*part.name).collect();
             let layout = g.resolve_complex(&names);
             assert!(
                 layout.is_valid(),
@@ -299,7 +296,7 @@ fn every_complex_instance_in_real_ap214_files_resolves() {
                 record.id.as_str(),
                 layout.issues()
             );
-            for (part, written) in layout.parts().iter().zip(&record.records) {
+            for (part, written) in layout.parts().iter().zip(record.records()) {
                 assert_eq!(
                     part.slots().len(),
                     written.parameters.len(),
