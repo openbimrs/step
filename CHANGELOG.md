@@ -38,6 +38,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   and -41..-58% cycles; `parse_events_borrowed` -8..-11% instructions and
   -6..-16% cycles. The full IFC model read is -6..-8% instructions: the
   tokenizer is now about a quarter of it.
+- Parameter lists are allocated once, at their exact length: the parser
+  collects each list on a reusable scratch stack and moves it into a `Vec`
+  of the final size, instead of growing a `Vec` by doubling and keeping the
+  slack. A typed value with one parameter is boxed straight off the stack.
+  `parse_with` gives the record array's growth slack back once at the end.
+  Output unchanged (identical to 0.6.2 on 800 real and 3,000 generated
+  files). On a 109 MB Revit IFC: peak memory of `parse` 756 -> 614 MB
+  (-19%), `parse_parallel_with` 784 -> 642 MB, scan + decode of every
+  record 636 -> 496 MB (-22%), at 1-2% fewer cycles.
 - String literals are skipped with two fast paths: a closing quote whose
   next byte can neither double it nor be skipped, and a backslash whose next
   byte cannot start `\\`, `\S\` or a directive, bypass the

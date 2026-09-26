@@ -87,6 +87,10 @@ pub fn parse_with(input: &[u8], options: ParseOptions) -> Result<ParseOutcome, S
 
     let mut builder = Builder::default();
     let diagnostics = parse_events_with(input, &mut builder, options)?;
+    // The record array grew by doubling; give the unused tail back once.
+    // A reallocation of the final size, instead of up to half again as
+    // much memory for as long as the exchange lives.
+    builder.data.records.shrink_to_fit();
     Ok(ParseOutcome {
         exchange: Exchange {
             header: builder.header,
@@ -232,7 +236,7 @@ enum Phase {
     Done,
 }
 
-struct Parser<'a> {
+struct Parser<'a, S> {
     input: &'a [u8],
     lexer: Lexer<'a>,
     lookahead: Option<Spanned<Token<'a>>>,
@@ -249,6 +253,11 @@ struct Parser<'a> {
     stopped: Option<usize>,
     /// Source span of every data record emitted, when collected.
     record_spans: Option<Vec<Span>>,
+    /// Parameters of the lists being parsed, innermost last. Each list
+    /// pushes onto it from its own base and drains its tail into a `Vec`
+    /// of exactly its length, so no list carries growth slack or pays for
+    /// regrowth, and the stack's own buffer is reused for the whole parse.
+    scratch: Vec<Parameter<S>>,
 }
 
 /// Where a restricted parse ends. The parallel driver parses the header up
@@ -327,6 +336,10 @@ pub(crate) fn parse_chunk(
     })
 }
 
+/// Scratch capacity for decoding a single record: records of real files
+/// rarely hold more than this many parameters across their open lists.
+const RECORD_SCRATCH: usize = 32;
+
 /// Parses the one data record that occupies exactly `span`. Between records
 /// the parser's whole state is its offset, so this is what a whole-file parse
 /// produces for that record, and a record that does not end exactly at
@@ -344,6 +357,9 @@ fn parse_record_at<'a, S: Text<'a>>(
         )));
     }
     let mut parser = Parser::new(input);
+    // One allocation that fits the parameters of almost every record,
+    // instead of regrowing the stack from empty for each decoded record.
+    parser.scratch = Vec::with_capacity(RECORD_SCRATCH);
     parser.phase = Phase::Data;
     parser.lexer.resume_at(span.start);
     parser.last_end = span.start;
@@ -377,7 +393,7 @@ pub(crate) fn decode_borrowed(
     parse_record_at(input, span)
 }
 
-impl<'a> Parser<'a> {
+impl<'a, S: Text<'a>> Parser<'a, S> {
     fn new(input: &'a [u8]) -> Self {
         Self {
             input,
@@ -392,12 +408,13 @@ impl<'a> Parser<'a> {
             stop: Stop::Never,
             stopped: None,
             record_spans: None,
+            scratch: Vec::new(),
         }
     }
 
     // Keeping section dispatch together makes the state-machine transitions auditable.
     #[allow(clippy::too_many_lines)]
-    fn parse<S: Text<'a>>(&mut self, sink: &mut impl EventSink<S>) -> Result<(), StepError> {
+    fn parse(&mut self, sink: &mut impl EventSink<S>) -> Result<(), StepError> {
         loop {
             if let Stop::AtOffset(end) = self.stop {
                 // Between records there is no lookahead, and the lexer sits
@@ -543,11 +560,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses one `#id = ...;` data record, assuming the id token was consumed.
-    fn parse_data_record<S: Text<'a>>(
-        &mut self,
-        id: &[u8],
-        id_span: Span,
-    ) -> Result<DataRecord<S>, StepError> {
+    fn parse_data_record(&mut self, id: &[u8], id_span: Span) -> Result<DataRecord<S>, StepError> {
         self.expect_equals()?;
         let record_token = self.next()?.ok_or_else(|| {
             StepError::syntax(Span::new(id_span.end, id_span.end), "missing record body")
@@ -747,17 +760,14 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn parse_named_record<S: Text<'a>>(
-        &mut self,
-        name: Cow<'a, [u8]>,
-    ) -> Result<Record<S>, StepError> {
+    fn parse_named_record(&mut self, name: Cow<'a, [u8]>) -> Result<Record<S>, StepError> {
         Ok(Record {
             name: S::name(name),
             parameters: self.parse_arguments()?,
         })
     }
 
-    fn parse_arguments<S: Text<'a>>(&mut self) -> Result<Vec<Parameter<S>>, StepError> {
+    fn parse_arguments(&mut self) -> Result<Vec<Parameter<S>>, StepError> {
         let token = self
             .next()?
             .ok_or_else(|| StepError::syntax(self.eof_span(), "expected '(' after record name"))?;
@@ -770,10 +780,28 @@ impl<'a> Parser<'a> {
         self.parse_parameter_list(0)
     }
 
-    fn parse_parameter_list<S: Text<'a>>(
-        &mut self,
-        depth: usize,
-    ) -> Result<Vec<Parameter<S>>, StepError> {
+    /// Parses a list after its `(` into a `Vec` of exactly its length.
+    fn parse_parameter_list(&mut self, depth: usize) -> Result<Vec<Parameter<S>>, StepError> {
+        let base = self.parse_list_onto_scratch(depth)?;
+        // `Drain` knows its exact length, so this allocates once, exactly.
+        Ok(self.scratch.drain(base..).collect())
+    }
+
+    /// Parses a list's parameters onto the scratch stack and returns the
+    /// list's base there: the list is `scratch[base..]`. Nested lists are
+    /// drained before their parent pushes again, so the stack discipline
+    /// holds. On error the scratch is cut back to `base`, so a recovering
+    /// parse resumes with it clean.
+    fn parse_list_onto_scratch(&mut self, depth: usize) -> Result<usize, StepError> {
+        let base = self.scratch.len();
+        let result = self.parse_list_items(depth);
+        if result.is_err() {
+            self.scratch.truncate(base);
+        }
+        result.map(|()| base)
+    }
+
+    fn parse_list_items(&mut self, depth: usize) -> Result<(), StepError> {
         if depth > crate::MAX_PARAMETER_NESTING {
             let span = match self.peek()? {
                 Some(token) => token.span,
@@ -781,22 +809,22 @@ impl<'a> Parser<'a> {
             };
             return Err(StepError::syntax(span, "parameter nesting limit exceeded"));
         }
-        let mut parameters = Vec::new();
         if self
             .peek()?
             .is_some_and(|token| token.value == Token::CloseParen)
         {
             let _ = self.next()?;
-            return Ok(parameters);
+            return Ok(());
         }
         loop {
-            parameters.push(self.parse_parameter(depth)?);
+            let parameter = self.parse_parameter(depth)?;
+            self.scratch.push(parameter);
             let separator = self
                 .next()?
                 .ok_or_else(|| StepError::syntax(self.eof_span(), "unterminated parameter list"))?;
             match separator.value {
                 Token::Comma => {}
-                Token::CloseParen => return Ok(parameters),
+                Token::CloseParen => return Ok(()),
                 _ => {
                     return Err(StepError::syntax(
                         separator.span,
@@ -807,7 +835,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_parameter<S: Text<'a>>(&mut self, depth: usize) -> Result<Parameter<S>, StepError> {
+    fn parse_parameter(&mut self, depth: usize) -> Result<Parameter<S>, StepError> {
         let token = self
             .next()?
             .ok_or_else(|| StepError::syntax(self.eof_span(), "expected parameter"))?;
@@ -846,11 +874,13 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 let _ = self.next()?;
-                let mut parameters = self.parse_parameter_list(depth + 1)?;
-                let value = if parameters.len() == 1 {
-                    Box::new(parameters.remove(0))
+                let base = self.parse_list_onto_scratch(depth + 1)?;
+                // A single value is boxed straight off the stack, without
+                // a one-element `Vec` built only to be taken apart again.
+                let value = if self.scratch.len() == base + 1 {
+                    Box::new(self.scratch.pop().expect("the list holds one value"))
                 } else {
-                    Box::new(Parameter::List(parameters))
+                    Box::new(Parameter::List(self.scratch.drain(base..).collect()))
                 };
                 Ok(Parameter::Typed {
                     type_name: S::name(name),
