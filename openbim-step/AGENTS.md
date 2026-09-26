@@ -12,6 +12,13 @@ Generic ISO 10303-21 physical-file and ISO 10303-11 EXPRESS language infrastruct
   `parse_with`'s exactly; a slice is used only if its parser lands on the
   slice's end offset, anything else falls back to the sequential parse.
   `tests/parallel.rs` checks equality over traps for the split guess;
+- the lazy record index (`src/scan.rs`: `scan`, `decode_record`). Invariant:
+  if the scan and the decode of every record succeed, `parse` succeeds with
+  exactly those records. Framing uses fast paths, but inter-record bytes go
+  through the lexer and a decode must end exactly at its span, so a framing
+  slip can only become an error. `tests/scan.rs` checks it on traps and
+  3,000 seeded mutants; lexer string changes also need pinned-value tests,
+  because they move `parse` and `scan` together;
 - performance work is measured, not assumed: equivalence against the last
   release plus instruction counts (the dev VM is shared and noisy);
 - opt-in Part 21 reference integrity (duplicate ids, dangling references) as

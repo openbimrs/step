@@ -22,6 +22,7 @@ mod partition;
 /// Malformed-record recovery policy and non-fatal diagnostics.
 pub mod recovery;
 mod references;
+mod scan;
 pub mod schema;
 /// Semantic exchange writer.
 pub mod writer;
@@ -38,6 +39,7 @@ pub use parser::{
 };
 pub use partition::{data_record_spans, partition_data_records, Partition};
 pub use recovery::{Diagnostic, DiagnosticKind, OnMalformed, ParseOptions, ParseOutcome, Severity};
+pub use scan::{decode_record, decode_record_borrowed, scan, Records, Scan, ScannedRecord};
 pub use schema::SchemaGraph;
 pub use writer::{write, write_parameter, write_to_string};
 

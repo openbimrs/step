@@ -43,7 +43,7 @@ impl InstanceId {
     }
 
     /// Stores already-validated ASCII digits.
-    fn from_digits(value: &[u8]) -> Self {
+    pub(crate) fn from_digits(value: &[u8]) -> Self {
         if value.len() <= INLINE_DIGITS {
             let mut bytes = [0; INLINE_DIGITS];
             bytes[..value.len()].copy_from_slice(value);

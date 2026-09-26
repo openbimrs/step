@@ -39,6 +39,16 @@ pub enum Token<'a> {
     Semicolon,
 }
 
+/// The head of a data record read by [`Lexer::record_head`].
+pub(crate) struct RecordHead<'a> {
+    /// Offset of `#`.
+    pub(crate) start: usize,
+    /// The id digits.
+    pub(crate) id: &'a [u8],
+    /// The record name; `None` for a complex instance.
+    pub(crate) name: Option<&'a [u8]>,
+}
+
 /// Streaming tokenizer over a byte slice.
 ///
 /// Performance note: the per-token helpers (`lex_id`, `lex_name`,
@@ -351,7 +361,7 @@ impl<'a> Lexer<'a> {
     }
 
     #[inline]
-    fn skip_trivia(&mut self) -> Result<(), StepError> {
+    pub(crate) fn skip_trivia(&mut self) -> Result<(), StepError> {
         if self.position == 0 && self.input.starts_with(&[0xef, 0xbb, 0xbf]) {
             self.position = 3;
         }
@@ -424,8 +434,94 @@ impl<'a> Lexer<'a> {
     }
 
     fn lex_text(&mut self, start: usize) -> Result<Token<'a>, StepError> {
-        self.position += 1;
-        let body_start = self.position;
+        let body_start = start + 1;
+        self.skip_text(start)?;
+        // `skip_text` stops just past the closing quote.
+        let text = strip_text_print_directives(self.token_bytes(body_start, self.position - 1));
+        Ok(Token::Text(text))
+    }
+
+    /// Reads the head of a data record in its common shape -- `#digits`,
+    /// `=`, then a name or `(`, separated only by whitespace -- and leaves
+    /// the lexer just past the name or `(`.
+    ///
+    /// Anything else -- a comment or directive, an ignored control inside a
+    /// token -- returns `None` with the lexer unmoved, and the caller reads
+    /// the head token by token instead. Where this returns a head,
+    /// [`Self::next_spanned`] reads the same tokens: between tokens the
+    /// lexer skips exactly this whitespace, and a control right after the
+    /// digits is inside the id for it only if more digits follow, which
+    /// fails the `=` test here.
+    #[inline]
+    pub(crate) fn record_head(&mut self) -> Option<RecordHead<'a>> {
+        let input = self.input;
+        let mut position = self.position;
+        while input
+            .get(position)
+            .is_some_and(|byte| class(*byte) & WHITESPACE != 0)
+        {
+            position += 1;
+        }
+        let start = position;
+        if input.get(position) != Some(&b'#') {
+            return None;
+        }
+        position += 1;
+        let digits = position;
+        while input
+            .get(position)
+            .is_some_and(|byte| class(*byte) & DIGIT != 0)
+        {
+            position += 1;
+        }
+        let id = &input[digits..position];
+        let skip_whitespace = |mut position: usize| {
+            while input
+                .get(position)
+                .is_some_and(|byte| class(*byte) & WHITESPACE != 0)
+            {
+                position += 1;
+            }
+            position
+        };
+        position = skip_whitespace(position);
+        if id.is_empty() || input.get(position) != Some(&b'=') {
+            return None;
+        }
+        position = skip_whitespace(position + 1);
+        let name = match input.get(position) {
+            Some(b'(') => {
+                position += 1;
+                None
+            }
+            Some(byte) if byte.is_ascii_alphabetic() || *byte == b'_' => {
+                let name_start = position;
+                while input
+                    .get(position)
+                    .is_some_and(|byte| class(*byte) & NAME != 0)
+                {
+                    position += 1;
+                }
+                // A control would continue the name for `lex_name`.
+                if input
+                    .get(position)
+                    .is_some_and(|byte| class(*byte) & CONTROL != 0)
+                {
+                    return None;
+                }
+                Some(&input[name_start..position])
+            }
+            _ => return None,
+        };
+        self.position = position;
+        Some(RecordHead { start, id, name })
+    }
+
+    /// Moves past the string literal whose opening quote is at `start`,
+    /// leaving the lexer just past its closing quote. The record scanner
+    /// uses this so it ends a literal exactly where [`Self::lex_text`] does.
+    pub(crate) fn skip_text(&mut self, start: usize) -> Result<(), StepError> {
+        self.position = start + 1;
         // Only `\` and `'` can change how a string body is read. Every other
         // byte -- ignored controls included, because the matchers below skip
         // those themselves before looking for `\` -- only advances by one, so
@@ -433,6 +529,30 @@ impl<'a> Lexer<'a> {
         while let Some(offset) = memchr::memchr2(b'\\', b'\'', &self.input[self.position..]) {
             self.position += offset;
             let byte = self.input[self.position];
+            // The common close: a quote followed by a byte that can neither
+            // double it (`'`), start a directive between the two quotes
+            // (`\`), nor be skipped as an ignored control. The matchers
+            // below cannot match at a quote in that case, so skip them.
+            if byte == b'\''
+                && self.input.get(self.position + 1).is_none_or(|next| {
+                    *next != b'\'' && *next != b'\\' && class(*next) & CONTROL == 0
+                })
+            {
+                self.position += 1;
+                return Ok(());
+            }
+            // The common escape byte, as in `\X2\00E4\X0\`: a backslash
+            // followed by a byte that cannot continue `\\` or `\S\`, open a
+            // `\N\`/`\F\` directive, or be skipped as a control. None of the
+            // matchers below can match, and it is not a quote: step over it.
+            if byte == b'\\'
+                && self.input.get(self.position + 1).is_some_and(|next| {
+                    !matches!(next, b'\\' | b'S' | b'N' | b'F') && class(*next) & CONTROL == 0
+                })
+            {
+                self.position += 1;
+                continue;
+            }
             // `\\` is one escaped backslash. Consume it whole so its second
             // byte cannot open a `\S\` page escape below.
             if let Some(end) = self.match_ignoring_text_controls(self.position, br"\\") {
@@ -455,9 +575,8 @@ impl<'a> Lexer<'a> {
                     self.position = end;
                     continue;
                 }
-                let text = strip_text_print_directives(self.token_bytes(body_start, self.position));
                 self.position += 1;
-                return Ok(Token::Text(text));
+                return Ok(());
             }
             self.position += 1;
         }

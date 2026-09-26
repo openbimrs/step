@@ -327,6 +327,56 @@ pub(crate) fn parse_chunk(
     })
 }
 
+/// Parses the one data record that occupies exactly `span`. Between records
+/// the parser's whole state is its offset, so this is what a whole-file parse
+/// produces for that record, and a record that does not end exactly at
+/// `span.end` is an error rather than a different record.
+fn parse_record_at<'a, S: Text<'a>>(
+    input: &'a [u8],
+    span: Span,
+) -> Result<DataRecord<S>, StepError> {
+    if span.start > span.end || span.end > input.len() {
+        return Err(StepError::invalid_argument(format!(
+            "record span {}..{} is outside the {}-byte input",
+            span.start,
+            span.end,
+            input.len()
+        )));
+    }
+    let mut parser = Parser::new(input);
+    parser.phase = Phase::Data;
+    parser.lexer.resume_at(span.start);
+    parser.last_end = span.start;
+    let token = parser
+        .next()?
+        .ok_or_else(|| StepError::syntax(span, "expected a data record"))?;
+    let Token::Id(id) = token.value else {
+        return Err(StepError::syntax(token.span, "expected a data record"));
+    };
+    let record = parser.parse_data_record(&id, token.span)?;
+    if parser.lexer.offset() != span.end {
+        return Err(StepError::syntax(
+            Span::new(span.start, parser.lexer.offset()),
+            "data record does not end at the end of its span",
+        ));
+    }
+    Ok(record)
+}
+
+/// [`parse_record_at`] with owned text, as [`parse`] returns it.
+pub(crate) fn decode_owned(input: &[u8], span: Span) -> Result<DataRecord, StepError> {
+    parse_record_at(input, span)
+}
+
+/// [`parse_record_at`] with text borrowed where it can be, as
+/// [`parse_events_borrowed`] returns it.
+pub(crate) fn decode_borrowed(
+    input: &[u8],
+    span: Span,
+) -> Result<DataRecord<Cow<'_, str>>, StepError> {
+    parse_record_at(input, span)
+}
+
 impl<'a> Parser<'a> {
     fn new(input: &'a [u8]) -> Self {
         Self {

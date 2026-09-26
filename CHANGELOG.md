@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- `scan(input)`: a lazy record index. It parses the header exactly as
+  `parse` does, then yields each data record's id, name and byte span
+  without tokenizing its parameters; `decode_record` /
+  `decode_record_borrowed` (or `Scan::decode`) parse one record on demand.
+  Everything between records -- trivia, `ENDSEC;`, the end marker -- is read
+  with the lexer, and a decode fails unless the record ends exactly at its
+  span, so if the scan and every decode succeed, `parse` succeeds with the
+  same records: a framing slip is an error, never a different record. Junk
+  between records, a missing `ENDSEC` and a second file appended after the
+  end marker are errors, not skipped. Measured against ifc-lite 8.1.1 on
+  nine STEP and IFC files (0.1-415 MB, user cycles, min of 3): the scan
+  costs 0.90-1.06x ifc-lite's non-validating entity scanner (1.26x on the
+  escape-heavy IFC4_ADD2 sample), about 1.4-1.7 GB/s on large IFC files;
+  scanning and decoding every record with borrowed text costs 0.69-0.97x
+  ifc-lite decoding every entity (1.08x on IFC4_ADD2). Peak memory for a
+  fully decoded file is still 1.2-1.6x ifc-lite's.
+
 ### Changed
 
 - Faster tokenizer, same output. Per-byte loops use a byte-class table
@@ -19,6 +38,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   and -41..-58% cycles; `parse_events_borrowed` -8..-11% instructions and
   -6..-16% cycles. The full IFC model read is -6..-8% instructions: the
   tokenizer is now about a quarter of it.
+- String literals are skipped with two fast paths: a closing quote whose
+  next byte can neither double it nor be skipped, and a backslash whose next
+  byte cannot start `\\`, `\S\` or a directive, bypass the
+  control-and-directive-aware matchers. Output identical to 0.6.2 on 800
+  real and 3,000 generated files (tokens, records, partitions, errors).
 
 ## [0.7.0] - 2026-09-24
 
