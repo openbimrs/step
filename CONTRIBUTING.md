@@ -32,5 +32,5 @@ workflow by hand with an existing tag: it gates and packages, and publishes
 nothing.
 
 crates.io trusts this repository, the file name `release.yml` and the
-`release` environment (crate Settings -> Trusted Publishing); renaming
+`crates.io` environment (crate Settings -> Trusted Publishing); renaming
 either needs the same change there.
