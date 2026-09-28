@@ -6,6 +6,50 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-28
+
+### Added
+
+- `express::parse` extracts the aggregate shape of every explicit
+  attribute: `Attribute::aggregation` lists its levels outermost first, each
+  an `Aggregation` with its `AggregateKind` (`LIST`, `SET`, `BAG`, `ARRAY`),
+  `lower` and `upper` `Bound` (an integer, `?`, or an unevaluated
+  expression), whether its elements are `UNIQUE`, and whether an `ARRAY`'s
+  elements are `OPTIONAL`. Omitted bounds are recorded as `[0:?]`, as
+  ISO 10303-11 defines them.
+- `EntityDef::inverses`: the entity's `INVERSE` attributes, each an
+  `InverseAttribute` with its name, target `entity`, `for_attribute` as
+  written, optional `SET`/`BAG` aggregation, and the supertype it
+  `redeclares` for `SELF\X.Name`.
+- `EntityDef::unique_rules`: the entity's `UNIQUE` rules, each a
+  `UniqueRule` with its label (if any) and attribute names as written
+  (qualified `SELF\X.Y` kept).
+- Constructors for building declarations without struct literals:
+  `ParsedSchema::new`, `TypeDef::new`, `WhereRule::new`,
+  `Redeclaration::new`, `Aggregation::new`, `InverseAttribute::new`,
+  `UniqueRule::new`, and `EntityDef::{abstract_, with_where_rule,
+  with_inverse, with_unique_rule}`, `Attribute::with_aggregation`.
+
+Checked on the IFC2X3 TC1, IFC4 ADD2 TC1 and IFC4X3 ADD2 schemas: 115/153/165
+inverse attributes and 17/4/4 unique rules, equal to an independent count of
+the schema text. Every other extracted field is unchanged on all three
+schemas except the nested-list fix below.
+
+### Changed (breaking)
+
+- Every declaration type in `express` is `#[non_exhaustive]`
+  (`ParsedSchema`, `EntityDef`, `Attribute`, `TypeDef`, `TypeKind`,
+  `WhereRule`, `Redeclaration`, and the new types), so extracting more of
+  the language later is not a breaking change. Code that built these with
+  struct literals uses the constructors instead; destructuring needs `..`.
+- A nested aggregate's `Attribute::type_name` is its innermost element type:
+  `CoordList : LIST [1:?] OF LIST [3:3] OF IfcLengthMeasure` now reports
+  `IfcLengthMeasure` where it reported `LIST`, and the two levels are in
+  `aggregation`. This changes 11 attributes of IFC4 and 12 of IFC4X3.
+- `OPTIONAL` makes an attribute optional only where it opens the
+  declaration; `ARRAY [1:3] OF OPTIONAL X` marks the elements
+  (`Aggregation::optional_elements`), not the attribute.
+
 ## [0.9.0] - 2026-09-26
 
 ### Changed (breaking)
@@ -364,7 +408,8 @@ slots) and are pinned in `tests/schema_graph.rs`.
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
 
-[Unreleased]: https://github.com/openbimrs/step/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/openbimrs/step/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/openbimrs/step/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/openbimrs/step/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/openbimrs/step/compare/v0.6.2...v0.7.0
