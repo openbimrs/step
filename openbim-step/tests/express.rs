@@ -1,6 +1,9 @@
 #![allow(missing_docs)]
 
-use openbim_step::express::{parse, Attribute, EntityDef, ParsedSchema, TypeDef, TypeKind};
+use openbim_step::express::{
+    parse, AggregateKind, Aggregation, Attribute, Bound, EntityDef, InverseAttribute, ParsedSchema,
+    TypeDef, TypeKind, UniqueRule,
+};
 
 #[test]
 fn schema_model_builders_preserve_the_ifc_schema_surface() {
@@ -14,10 +17,7 @@ fn schema_model_builders_preserve_the_ifc_schema_surface() {
     assert_eq!(entity.supertype(), Some("IfcRoot"));
     assert_eq!(entity.attributes.len(), 1);
 
-    let defined = TypeDef {
-        name: "IfcLabel".into(),
-        kind: TypeKind::Defined("STRING".into()),
-    };
+    let defined = TypeDef::new("IfcLabel", TypeKind::Defined("STRING".into()));
     assert!(defined.is_defined());
 }
 
@@ -50,6 +50,7 @@ fn structural_partial_express_parser_extracts_supported_declarations() {
         name,
         entities,
         types,
+        ..
     } = parse(SCHEMA);
     assert_eq!(name, "DEMO");
     assert_eq!(entities.len(), 2);
@@ -58,20 +59,9 @@ fn structural_partial_express_parser_extracts_supported_declarations() {
     let root = &entities[0];
     assert_eq!(
         root,
-        &EntityDef {
-            name: "Root".into(),
-            supertypes: Vec::new(),
-            abstract_: true,
-            attributes: vec![Attribute {
-                name: "Label".into(),
-                type_name: "STRING".into(),
-                optional: true,
-                aggregate: false
-            }],
-            derived: Vec::new(),
-            redeclared: Vec::new(),
-            where_rules: Vec::new(),
-        }
+        &EntityDef::new("Root")
+            .abstract_()
+            .with_attribute(Attribute::new("Label", "STRING").optional())
     );
     let item = &entities[1];
     assert_eq!(item.supertype(), Some("Root"));
@@ -84,10 +74,7 @@ fn structural_partial_express_parser_extracts_supported_declarations() {
 
     assert_eq!(
         types[0],
-        TypeDef {
-            name: "Distance".into(),
-            kind: TypeKind::Defined("REAL".into())
-        }
+        TypeDef::new("Distance", TypeKind::Defined("REAL".into()))
     );
     assert_eq!(
         types[1].kind,
@@ -464,4 +451,251 @@ fn explicit_redeclarations_are_not_new_attributes() {
     );
     assert!(plane.is_redeclared("TARGET"));
     assert!(!plane.is_redeclared("extra"));
+}
+
+/// Aggregation shapes, INVERSE and UNIQUE blocks, including the traps: a
+/// `UNIQUE` inside an attribute's type, lower-case keywords, omitted bounds,
+/// expression bounds, and an inverse redeclared by a subtype.
+const SHAPES: &str = r"
+SCHEMA SHAPES;
+ENTITY Owner;
+  GlobalId : Label;
+  Code : Label;
+  Grid : LIST [2:3] OF UNIQUE LIST [1:?] OF Length;
+  Maps : list [1:?] of unique Map;
+  Tags : OPTIONAL SET OF Label;
+  Slots : ARRAY [1:3] OF OPTIONAL Length;
+  Knots : LIST [0 : SELF\Owner.Degree] OF Length;
+  Pairs : BAG [2:2] OF Length;
+  Degree : INTEGER;
+DERIVE
+  Count : INTEGER := SIZEOF(Maps);
+INVERSE
+  Parts : SET [0:?] OF Part FOR Whole;
+  Host : Part FOR Guest;
+  Uses : BAG [1:5] OF Part FOR Part.Used;
+UNIQUE
+  UR1 : GlobalId;
+  UR2 : GlobalId, SELF\Owner.Code;
+  Code;
+WHERE
+  WR1 : SIZEOF(QUERY(m <* Maps | TRUE)) > 0;
+END_ENTITY;
+ENTITY Special SUBTYPE OF (Owner);
+INVERSE
+  SELF\Owner.Parts : SET [1:1] OF Part FOR Whole;
+END_ENTITY;
+END_SCHEMA;
+";
+
+fn entity<'a>(schema: &'a ParsedSchema, name: &str) -> &'a EntityDef {
+    schema
+        .entities
+        .iter()
+        .find(|entity| entity.name == name)
+        .unwrap_or_else(|| panic!("{name} declared"))
+}
+
+fn attribute<'a>(entity: &'a EntityDef, name: &str) -> &'a Attribute {
+    entity
+        .attributes
+        .iter()
+        .find(|attribute| attribute.name == name)
+        .unwrap_or_else(|| panic!("{}.{name} declared", entity.name))
+}
+
+#[test]
+fn aggregation_levels_keep_kind_bounds_and_uniqueness_outermost_first() {
+    let schema = parse(SHAPES);
+    let owner = entity(&schema, "Owner");
+    assert_eq!(
+        owner
+            .attributes
+            .iter()
+            .map(|attribute| attribute.name.as_str())
+            .collect::<Vec<_>>(),
+        ["GlobalId", "Code", "Grid", "Maps", "Tags", "Slots", "Knots", "Pairs", "Degree"],
+        "INVERSE and UNIQUE declarations are not positional attributes"
+    );
+
+    assert_eq!(
+        attribute(owner, "Grid"),
+        &Attribute::new("Grid", "Length")
+            .with_aggregation(
+                Aggregation::new(AggregateKind::List, Bound::Integer(2), Bound::Integer(3))
+                    .unique()
+            )
+            .with_aggregation(Aggregation::new(
+                AggregateKind::List,
+                Bound::Integer(1),
+                Bound::Unbounded
+            ))
+    );
+    assert_eq!(
+        attribute(owner, "Maps"),
+        &Attribute::new("Maps", "Map").with_aggregation(
+            Aggregation::new(AggregateKind::List, Bound::Integer(1), Bound::Unbounded).unique()
+        ),
+        "keywords are case-insensitive"
+    );
+    assert_eq!(
+        attribute(owner, "Tags"),
+        &Attribute::new("Tags", "Label")
+            .optional()
+            .with_aggregation(Aggregation::new(
+                AggregateKind::Set,
+                Bound::Integer(0),
+                Bound::Unbounded
+            )),
+        "omitted bounds are [0:?]"
+    );
+    assert_eq!(
+        attribute(owner, "Slots"),
+        &Attribute::new("Slots", "Length").with_aggregation(
+            Aggregation::new(AggregateKind::Array, Bound::Integer(1), Bound::Integer(3))
+                .optional_elements()
+        ),
+        "OPTIONAL elements do not make the attribute optional"
+    );
+    assert_eq!(
+        attribute(owner, "Knots").aggregation[0].upper,
+        Bound::Expression("SELF\\Owner.Degree".into())
+    );
+    assert_eq!(
+        attribute(owner, "Pairs").aggregation[0].kind,
+        AggregateKind::Bag
+    );
+    assert!(attribute(owner, "Degree").aggregation.is_empty());
+    assert!(!attribute(owner, "Degree").aggregate);
+}
+
+#[test]
+fn inverse_attributes_record_target_for_attribute_and_bounds() {
+    let schema = parse(SHAPES);
+    let owner = entity(&schema, "Owner");
+    assert_eq!(
+        owner.inverses,
+        [
+            InverseAttribute::new("Parts", "Part", "Whole").with_aggregation(Aggregation::new(
+                AggregateKind::Set,
+                Bound::Integer(0),
+                Bound::Unbounded
+            )),
+            InverseAttribute::new("Host", "Part", "Guest"),
+            InverseAttribute::new("Uses", "Part", "Part.Used").with_aggregation(Aggregation::new(
+                AggregateKind::Bag,
+                Bound::Integer(1),
+                Bound::Integer(5)
+            )),
+        ]
+    );
+    assert_eq!(owner.derived, ["Count"]);
+    assert_eq!(owner.where_rules.len(), 1);
+
+    let special = entity(&schema, "Special");
+    assert_eq!(special.inverses.len(), 1);
+    assert_eq!(special.inverses[0].name, "Parts");
+    assert_eq!(special.inverses[0].redeclares.as_deref(), Some("Owner"));
+    assert!(special.attributes.is_empty());
+}
+
+#[test]
+fn unique_rules_keep_labels_and_names_as_written() {
+    let schema = parse(SHAPES);
+    let owner = entity(&schema, "Owner");
+    assert_eq!(
+        owner.unique_rules[..2],
+        [
+            UniqueRule::new("UR1", vec!["GlobalId".into()]),
+            UniqueRule::new("UR2", vec!["GlobalId".into(), "SELF\\Owner.Code".into()]),
+        ]
+    );
+    assert_eq!(owner.unique_rules[2].label, None);
+    assert_eq!(owner.unique_rules[2].attributes, ["Code"]);
+}
+
+/// The three IFC schemas, when a local copy is configured
+/// (`STEP_IFC_SCHEMA_DIR` containing `ifc2x3-tc1/IFC2X3_TC1.exp`,
+/// `ifc4-add2-tc1/IFC4.exp` and `ifc4x3-add2/IFC4X3_ADD2.exp`, the layout
+/// `openbimrs/ifc`'s `scripts/fetch-ifc-schemas.sh` produces).
+///
+/// The declaration counts were checked against an independent count of the
+/// schema text (statements between a line-level `INVERSE` or `UNIQUE` and the
+/// next block keyword).
+#[test]
+fn ifc_schemas_expose_inverses_unique_rules_and_bounds() {
+    let Some(dir) = std::env::var_os("STEP_IFC_SCHEMA_DIR") else {
+        return;
+    };
+    let dir = std::path::Path::new(&dir);
+    for (path, inverses, unique_rules, decomposed_by) in [
+        ("ifc2x3-tc1/IFC2X3_TC1.exp", 115, 17, "IfcRelDecomposes"),
+        ("ifc4-add2-tc1/IFC4.exp", 153, 4, "IfcRelAggregates"),
+        ("ifc4x3-add2/IFC4X3_ADD2.exp", 165, 4, "IfcRelAggregates"),
+    ] {
+        let schema = parse(&std::fs::read_to_string(dir.join(path)).expect("schema readable"));
+        let count = |f: fn(&EntityDef) -> usize| schema.entities.iter().map(f).sum::<usize>();
+        assert_eq!(count(|e| e.inverses.len()), inverses, "{path}");
+        assert_eq!(count(|e| e.unique_rules.len()), unique_rules, "{path}");
+
+        assert_eq!(
+            attribute(entity(&schema, "IfcCartesianPoint"), "Coordinates").aggregation,
+            [Aggregation::new(
+                AggregateKind::List,
+                Bound::Integer(1),
+                Bound::Integer(3)
+            )],
+            "{path}"
+        );
+        assert_eq!(
+            entity(&schema, "IfcRoot").unique_rules,
+            [UniqueRule::new("UR1", vec!["GlobalId".into()])],
+            "{path}"
+        );
+        assert_eq!(
+            entity(&schema, "IfcApplication").unique_rules.last(),
+            Some(&UniqueRule::new(
+                "UR2",
+                vec!["ApplicationFullName".into(), "Version".into()]
+            )),
+            "{path}"
+        );
+        let decomposed = entity(&schema, "IfcObjectDefinition")
+            .inverses
+            .iter()
+            .find(|inverse| inverse.name == "IsDecomposedBy")
+            .expect("IsDecomposedBy");
+        assert_eq!(decomposed.entity, decomposed_by, "{path}");
+        assert_eq!(decomposed.for_attribute, "RelatingObject", "{path}");
+        assert_eq!(
+            decomposed.aggregation,
+            Some(Aggregation::new(
+                AggregateKind::Set,
+                Bound::Integer(0),
+                Bound::Unbounded
+            )),
+            "{path}"
+        );
+        // The UNIQUE inside RepresentationMaps' type must not open a block.
+        let type_product = entity(&schema, "IfcTypeProduct");
+        assert!(attribute(type_product, "RepresentationMaps").aggregation[0].unique);
+        assert!(type_product.attributes.iter().any(|a| a.name == "Tag"));
+    }
+
+    let ifc4 = parse(&std::fs::read_to_string(dir.join("ifc4-add2-tc1/IFC4.exp")).unwrap());
+    assert_eq!(
+        attribute(entity(&ifc4, "IfcCartesianPointList3D"), "CoordList"),
+        &Attribute::new("CoordList", "IfcLengthMeasure")
+            .with_aggregation(Aggregation::new(
+                AggregateKind::List,
+                Bound::Integer(1),
+                Bound::Unbounded
+            ))
+            .with_aggregation(Aggregation::new(
+                AggregateKind::List,
+                Bound::Integer(3),
+                Bound::Integer(3)
+            )),
+        "nested lists no longer collapse to one"
+    );
 }

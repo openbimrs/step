@@ -27,7 +27,13 @@ Generic ISO 10303-21 physical-file and ISO 10303-11 EXPRESS language infrastruct
 - opt-in Part 21 reference integrity (duplicate ids, dangling references) as
   non-fatal diagnostics, in `src/references.rs` — syntax-level only, never
   schema-aware;
-- schema-neutral EXPRESS declarations, type expressions, and parser diagnostics;
+- schema-neutral EXPRESS declarations, type expressions, and parser diagnostics:
+  explicit attributes with their aggregation levels and bounds, derived
+  names, redeclarations, INVERSE attributes, UNIQUE and WHERE rules (as
+  text). The declaration types are `#[non_exhaustive]`: add fields, never
+  require struct literals. `tests/express.rs` checks declaration counts and
+  known shapes on the IFC2X3/IFC4/IFC4X3 schemas when `STEP_IFC_SCHEMA_DIR`
+  points at them (`openbimrs/ifc`'s `references/ifc-spec` layout);
 - the schema graph over those declarations: supertype graphs (multiple
   inheritance), Part 21 positional attribute order, and defined-type alias
   resolution. Slot counts are cross-checked against OCCT in

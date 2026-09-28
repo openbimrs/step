@@ -1,16 +1,22 @@
 //! Explicitly structural, partial EXPRESS declaration extraction.
 //!
 //! This module extracts schema names, entity headers, explicit positional
-//! attributes, the names of derived attributes, defined types, enumerations,
-//! and selects. It deliberately does **not** implement full EXPRESS semantics:
-//! expressions, rules, functions, procedures, constants, uniqueness
-//! constraints, inverse relationships, and complete type checking remain
-//! opaque. Derived attributes are reported by *name only* — their initialiser
-//! expressions are not evaluated. Consumers needing language validation must
-//! use a complete EXPRESS implementation.
+//! attributes with their aggregate shape, the names of derived attributes,
+//! inverse attributes, uniqueness rules, `WHERE` rules as text, defined types,
+//! enumerations, and selects. It deliberately does **not** implement full
+//! EXPRESS semantics: expressions, rules, functions, procedures, constants,
+//! and complete type checking remain opaque. Derived attributes are reported
+//! by *name only* — their initialiser expressions are not evaluated, and
+//! neither are bound expressions or `WHERE` rules. Consumers needing language
+//! validation must use a complete EXPRESS implementation.
+//!
+//! Every declaration type is `#[non_exhaustive]`: extracting more of the
+//! language later adds fields without breaking callers. Build values with the
+//! constructors and `with_*` methods rather than struct literals.
 
 /// A structurally parsed schema.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParsedSchema {
     /// Declared schema name, or an empty string when absent.
     pub name: String,
@@ -20,17 +26,134 @@ pub struct ParsedSchema {
     pub types: Vec<TypeDef>,
 }
 
+impl ParsedSchema {
+    /// Creates a schema from its declarations.
+    #[must_use]
+    pub fn new(name: impl Into<String>, entities: Vec<EntityDef>, types: Vec<TypeDef>) -> Self {
+        Self {
+            name: name.into(),
+            entities,
+            types,
+        }
+    }
+}
+
+/// The four EXPRESS aggregation types (ISO 10303-11 §8.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AggregateKind {
+    /// `LIST`: ordered, duplicates allowed unless `UNIQUE`.
+    List,
+    /// `SET`: unordered, no duplicates.
+    Set,
+    /// `BAG`: unordered, duplicates allowed.
+    Bag,
+    /// `ARRAY`: fixed-size, indexed by its bounds.
+    Array,
+}
+
+impl AggregateKind {
+    fn from_keyword(keyword: &str) -> Option<Self> {
+        match keyword {
+            "LIST" => Some(Self::List),
+            "SET" => Some(Self::Set),
+            "BAG" => Some(Self::Bag),
+            "ARRAY" => Some(Self::Array),
+            _ => None,
+        }
+    }
+}
+
+/// One bound of an aggregation, as declared.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Bound {
+    /// An integer literal.
+    Integer(u64),
+    /// `?`: no upper limit.
+    Unbounded,
+    /// Any other bound expression, as written with whitespace normalised,
+    /// e.g. `SELF\IfcBSplineCurve.UpperIndexOnControlPoints`. It is not
+    /// evaluated.
+    Expression(String),
+}
+
+impl Bound {
+    fn parse(text: &str) -> Self {
+        let text = text.trim();
+        if text == "?" {
+            Self::Unbounded
+        } else if let Ok(value) = text.parse() {
+            Self::Integer(value)
+        } else {
+            Self::Expression(text.split_whitespace().collect::<Vec<_>>().join(" "))
+        }
+    }
+}
+
+/// One aggregation level of a declared type: `LIST [1:3] OF ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct Aggregation {
+    /// Which aggregation type.
+    pub kind: AggregateKind,
+    /// Lower bound. `0` when `LIST`, `SET` or `BAG` omit their bounds, which
+    /// ISO 10303-11 defines as `[0:?]`.
+    pub lower: Bound,
+    /// Upper bound. [`Bound::Unbounded`] when `LIST`, `SET` or `BAG` omit
+    /// their bounds.
+    pub upper: Bound,
+    /// Whether the elements are declared `UNIQUE` (`OF UNIQUE ...`).
+    pub unique: bool,
+    /// Whether an `ARRAY`'s elements are declared `OPTIONAL`
+    /// (`ARRAY [1:3] OF OPTIONAL ...`).
+    pub optional_elements: bool,
+}
+
+impl Aggregation {
+    /// Creates an aggregation level with explicit bounds.
+    #[must_use]
+    pub const fn new(kind: AggregateKind, lower: Bound, upper: Bound) -> Self {
+        Self {
+            kind,
+            lower,
+            upper,
+            unique: false,
+            optional_elements: false,
+        }
+    }
+
+    /// Marks the elements `UNIQUE`.
+    #[must_use]
+    pub const fn unique(mut self) -> Self {
+        self.unique = true;
+        self
+    }
+
+    /// Marks an `ARRAY`'s elements `OPTIONAL`.
+    #[must_use]
+    pub const fn optional_elements(mut self) -> Self {
+        self.optional_elements = true;
+        self
+    }
+}
+
 /// One explicit positional attribute.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Attribute {
     /// Declared attribute name.
     pub name: String,
-    /// Declared scalar or element type token.
+    /// Declared scalar type, or the innermost element type of an aggregate.
     pub type_name: String,
     /// Whether `OPTIONAL` was present.
     pub optional: bool,
-    /// Whether a `LIST`, `SET`, `ARRAY`, or `BAG` wrapper was present.
+    /// Whether a `LIST`, `SET`, `ARRAY`, or `BAG` wrapper was present. Equal
+    /// to `!aggregation.is_empty()`.
     pub aggregate: bool,
+    /// Aggregation levels, outermost first: `LIST [2:3] OF UNIQUE LIST [1:?]
+    /// OF IfcLengthMeasure` has two, the first `unique`. Empty for a scalar.
+    pub aggregation: Vec<Aggregation>,
 }
 
 impl Attribute {
@@ -42,6 +165,7 @@ impl Attribute {
             type_name: type_name.into(),
             optional: false,
             aggregate: false,
+            aggregation: Vec::new(),
         }
     }
 
@@ -52,11 +176,87 @@ impl Attribute {
         self
     }
 
-    /// Marks the attribute as an aggregate.
+    /// Marks the attribute as an aggregate without recording its shape.
+    ///
+    /// Prefer [`Self::with_aggregation`], which records the kind and bounds.
     #[must_use]
     pub const fn aggregate(mut self) -> Self {
         self.aggregate = true;
         self
+    }
+
+    /// Wraps the type in one more aggregation level, inside any already
+    /// added: call it outermost first.
+    #[must_use]
+    pub fn with_aggregation(mut self, aggregation: Aggregation) -> Self {
+        self.aggregation.push(aggregation);
+        self.aggregate = true;
+        self
+    }
+}
+
+/// One `INVERSE` attribute: `Name : SET [0:1] OF Entity FOR Attribute;`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct InverseAttribute {
+    /// Declared name, unqualified.
+    pub name: String,
+    /// The supertype named when a subtype redeclares an inherited inverse
+    /// (`SELF\X.Name : ...`); `None` for a new inverse attribute.
+    pub redeclares: Option<String>,
+    /// The entity whose attribute points back at this one.
+    pub entity: String,
+    /// The attribute named after `FOR`, as written (it may be qualified as
+    /// `Entity.Attribute`).
+    pub for_attribute: String,
+    /// `SET` or `BAG` with its bounds; `None` for a single-valued inverse.
+    pub aggregation: Option<Aggregation>,
+}
+
+impl InverseAttribute {
+    /// Creates a single-valued inverse attribute.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        entity: impl Into<String>,
+        for_attribute: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            redeclares: None,
+            entity: entity.into(),
+            for_attribute: for_attribute.into(),
+            aggregation: None,
+        }
+    }
+
+    /// Makes the inverse an aggregate (`SET` or `BAG`).
+    #[must_use]
+    pub fn with_aggregation(mut self, aggregation: Aggregation) -> Self {
+        self.aggregation = Some(aggregation);
+        self
+    }
+}
+
+/// One `UNIQUE` rule: the named attributes are unique, jointly, across all
+/// instances of the entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UniqueRule {
+    /// Rule label, e.g. `UR1`; `None` when the rule is unlabelled.
+    pub label: Option<String>,
+    /// Attribute names as written; qualified names (`SELF\X.Y`) are kept.
+    pub attributes: Vec<String>,
+}
+
+impl UniqueRule {
+    /// Creates a labelled rule over `attributes`.
+    #[must_use]
+    pub fn new(label: impl Into<String>, attributes: Vec<String>) -> Self {
+        Self {
+            label: Some(label.into()),
+            attributes,
+        }
     }
 }
 
@@ -70,6 +270,7 @@ impl Attribute {
 /// Capturing them lets a consumer prove a claim like "no rule constrains
 /// this attribute" instead of asserting it from prose.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WhereRule {
     /// Rule label as declared, e.g. `CurveIs3D`.
     pub label: String,
@@ -77,8 +278,20 @@ pub struct WhereRule {
     pub expression: String,
 }
 
+impl WhereRule {
+    /// Creates a rule.
+    #[must_use]
+    pub fn new(label: impl Into<String>, expression: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            expression: expression.into(),
+        }
+    }
+}
+
 /// One explicit redeclaration of an inherited attribute: `SELF\X.a : T;`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Redeclaration {
     /// The supertype named in the qualifier (`X`), as written.
     pub supertype: String,
@@ -88,8 +301,25 @@ pub struct Redeclaration {
     pub type_name: String,
 }
 
+impl Redeclaration {
+    /// Creates a redeclaration of the inherited `supertype.name`.
+    #[must_use]
+    pub fn new(
+        supertype: impl Into<String>,
+        name: impl Into<String>,
+        type_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            supertype: supertype.into(),
+            name: name.into(),
+            type_name: type_name.into(),
+        }
+    }
+}
+
 /// One structural entity declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct EntityDef {
     /// Declared entity name.
     pub name: String,
@@ -142,6 +372,10 @@ pub struct EntityDef {
     /// rules with its supertype's, and a consumer checking an instance must
     /// walk the supertype chain itself.
     pub where_rules: Vec<WhereRule>,
+    /// `INVERSE` attributes declared by this entity, in declaration order.
+    pub inverses: Vec<InverseAttribute>,
+    /// `UNIQUE` rules declared by this entity, in declaration order.
+    pub unique_rules: Vec<UniqueRule>,
 }
 
 impl EntityDef {
@@ -156,7 +390,37 @@ impl EntityDef {
             derived: Vec::new(),
             redeclared: Vec::new(),
             where_rules: Vec::new(),
+            inverses: Vec::new(),
+            unique_rules: Vec::new(),
         }
+    }
+
+    /// Marks the entity `ABSTRACT`.
+    #[must_use]
+    pub const fn abstract_(mut self) -> Self {
+        self.abstract_ = true;
+        self
+    }
+
+    /// Appends a `WHERE` rule.
+    #[must_use]
+    pub fn with_where_rule(mut self, rule: WhereRule) -> Self {
+        self.where_rules.push(rule);
+        self
+    }
+
+    /// Appends an `INVERSE` attribute.
+    #[must_use]
+    pub fn with_inverse(mut self, inverse: InverseAttribute) -> Self {
+        self.inverses.push(inverse);
+        self
+    }
+
+    /// Appends a `UNIQUE` rule.
+    #[must_use]
+    pub fn with_unique_rule(mut self, rule: UniqueRule) -> Self {
+        self.unique_rules.push(rule);
+        self
     }
 
     /// Appends a direct supertype, after any already declared.
@@ -223,6 +487,7 @@ impl EntityDef {
 
 /// Structural shape of a `TYPE` declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TypeKind {
     /// Alias or other right-hand-side syntax retained as text.
     Defined(String),
@@ -234,6 +499,7 @@ pub enum TypeKind {
 
 /// One `TYPE` declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TypeDef {
     /// Declared type name.
     pub name: String,
@@ -242,6 +508,15 @@ pub struct TypeDef {
 }
 
 impl TypeDef {
+    /// Creates a type declaration.
+    #[must_use]
+    pub fn new(name: impl Into<String>, kind: TypeKind) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+        }
+    }
+
     /// Returns whether this declaration aliases another type.
     #[must_use]
     pub const fn is_defined(&self) -> bool {
@@ -431,6 +706,12 @@ fn parse_entity(block: &str) -> Option<EntityDef> {
     }
     let derived = parse_derive_block(block, &upper, header_end + 1);
     let where_rules = parse_where_block(block, &upper, header_end + 1);
+    let inverses = block_statements(block, &upper, "INVERSE", header_end + 1)
+        .filter_map(parse_inverse)
+        .collect();
+    let unique_rules = block_statements(block, &upper, "UNIQUE", header_end + 1)
+        .filter_map(parse_unique_rule)
+        .collect();
 
     Some(EntityDef {
         name,
@@ -440,7 +721,150 @@ fn parse_entity(block: &str) -> Option<EntityDef> {
         derived,
         redeclared,
         where_rules,
+        inverses,
+        unique_rules,
     })
+}
+
+/// The `;`-separated statements of one entity block (`INVERSE`, `UNIQUE`),
+/// from its statement-level keyword to the next block keyword or
+/// `END_ENTITY`. Blocks appear in the order DERIVE, INVERSE, UNIQUE, WHERE.
+fn block_statements<'a>(
+    block: &'a str,
+    upper: &str,
+    keyword: &'static str,
+    from: usize,
+) -> impl Iterator<Item = &'a str> {
+    let range = find_block_keyword(block, upper, keyword, from).and_then(|start| {
+        let start = start + keyword.len();
+        let end = ["INVERSE", "UNIQUE", "WHERE", "END_ENTITY"]
+            .into_iter()
+            .filter(|next| *next != keyword)
+            .filter_map(|next| find_block_keyword(block, upper, next, start))
+            .min()
+            .unwrap_or(block.len());
+        (start < end).then_some(start..end)
+    });
+    range
+        .map_or("", |range| &block[range])
+        .split(';')
+        .filter(|statement| !statement.trim().is_empty())
+}
+
+/// Parse `Name : [SET|BAG [l:u] OF] Entity FOR Attribute`.
+fn parse_inverse(statement: &str) -> Option<InverseAttribute> {
+    let (target, declaration) = statement.split_once(':')?;
+    let target = target.trim();
+    let (redeclares, name) = match target
+        .get(..5)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("SELF\\"))
+    {
+        Some(_) => {
+            let (supertype, name) = target[5..].split_once('.')?;
+            (Some(supertype.trim().to_owned()), name.trim())
+        }
+        None => (None, target),
+    };
+    if name.is_empty() || !name.bytes().all(is_identifier_byte) {
+        return None;
+    }
+    let upper = ascii_uppercase(declaration);
+    let for_position = find_keyword(&upper, "FOR", 0)?;
+    let for_attribute = declaration[for_position + "FOR".len()..].trim();
+    let (aggregation, element) = aggregation_levels(&declaration[..for_position]);
+    let entity = element.split_whitespace().next()?;
+    if for_attribute.is_empty() || aggregation.len() > 1 {
+        return None;
+    }
+    Some(InverseAttribute {
+        name: name.to_owned(),
+        redeclares,
+        entity: entity.to_owned(),
+        for_attribute: for_attribute.split_whitespace().collect(),
+        aggregation: aggregation.into_iter().next(),
+    })
+}
+
+/// Parse `[Label :] a, b, ...` from a `UNIQUE` block.
+fn parse_unique_rule(statement: &str) -> Option<UniqueRule> {
+    // A qualified attribute (`SELF\X.Y`) contains no `:`, so a `:` can only
+    // end the label.
+    let (label, attributes) = match statement.split_once(':') {
+        Some((label, attributes)) => {
+            let label = label.trim();
+            if label.is_empty() || !label.bytes().all(is_identifier_byte) {
+                return None;
+            }
+            (Some(label.to_owned()), attributes)
+        }
+        None => (None, statement),
+    };
+    let attributes: Vec<String> = attributes
+        .split(',')
+        .map(|attribute| attribute.split_whitespace().collect::<String>())
+        .filter(|attribute| !attribute.is_empty())
+        .collect();
+    (!attributes.is_empty()).then_some(UniqueRule { label, attributes })
+}
+
+/// Split the aggregation levels off a type expression, outermost first,
+/// returning them and the remaining element type text.
+///
+/// `LIST [2:3] OF UNIQUE LIST [1:?] OF IfcLengthMeasure` yields two levels
+/// and `IfcLengthMeasure`. Bounds are optional for `LIST`, `SET` and `BAG`
+/// (then `[0:?]`); `ARRAY` requires them but is not rejected without.
+fn aggregation_levels(declaration: &str) -> (Vec<Aggregation>, &str) {
+    let mut levels = Vec::new();
+    let mut rest = declaration.trim_start();
+    loop {
+        let word_end = rest
+            .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .unwrap_or(rest.len());
+        let Some(kind) = AggregateKind::from_keyword(&rest[..word_end].to_ascii_uppercase()) else {
+            return (levels, rest);
+        };
+        let mut after = rest[word_end..].trim_start();
+        let (lower, upper) = if let Some(inner) = after.strip_prefix('[') {
+            let Some(close) = inner.find(']') else {
+                return (levels, rest);
+            };
+            let bounds = &inner[..close];
+            after = inner[close + 1..].trim_start();
+            match bounds.split_once(':') {
+                Some((lower, upper)) => (Bound::parse(lower), Bound::parse(upper)),
+                None => (Bound::parse(bounds), Bound::parse(bounds)),
+            }
+        } else {
+            (Bound::Integer(0), Bound::Unbounded)
+        };
+        let Some(of) = after
+            .get(..2)
+            .filter(|word| word.eq_ignore_ascii_case("OF"))
+            .map(|_| after[2..].trim_start())
+        else {
+            return (levels, rest);
+        };
+        let mut level = Aggregation::new(kind, lower, upper);
+        rest = of;
+        for (keyword, mark) in [
+            (
+                "OPTIONAL",
+                Aggregation::optional_elements as fn(Aggregation) -> Aggregation,
+            ),
+            ("UNIQUE", Aggregation::unique),
+        ] {
+            if rest
+                .get(..keyword.len())
+                .is_some_and(|word| word.eq_ignore_ascii_case(keyword))
+                && !rest[keyword.len()..]
+                    .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+            {
+                level = mark(level);
+                rest = rest[keyword.len()..].trim_start();
+            }
+        }
+        levels.push(level);
+    }
 }
 
 /// Collect the `WHERE` rules declared by one entity.
@@ -590,26 +1014,17 @@ fn parse_attribute(statement: &str) -> Option<Attribute> {
     if name.is_empty() {
         return None;
     }
-    let declaration = declaration.trim();
-    let upper = ascii_uppercase(declaration);
-    let optional = find_keyword(&upper, "OPTIONAL", 0).is_some();
-    let aggregate = ["LIST", "SET", "ARRAY", "BAG"]
-        .into_iter()
-        .any(|keyword| find_keyword(&upper, keyword, 0).is_some());
-    let scalar = if aggregate {
-        find_keyword(&upper, "OF", 0)
-            .map_or(declaration, |position| declaration[position + 2..].trim())
-    } else if optional {
-        find_keyword(&upper, "OPTIONAL", 0).map_or(declaration, |position| {
-            declaration[position + "OPTIONAL".len()..].trim()
-        })
-    } else {
-        declaration
-    };
-    let type_name = scalar
-        .trim_start_matches(|character: char| character.is_ascii_whitespace())
-        .strip_prefix("UNIQUE ")
-        .unwrap_or(scalar)
+    let mut declaration = declaration.trim();
+    let optional = declaration
+        .get(.."OPTIONAL".len())
+        .is_some_and(|word| word.eq_ignore_ascii_case("OPTIONAL"))
+        && !declaration["OPTIONAL".len()..]
+            .starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    if optional {
+        declaration = declaration["OPTIONAL".len()..].trim_start();
+    }
+    let (aggregation, element) = aggregation_levels(declaration);
+    let type_name = element
         .split_whitespace()
         .next()?
         .trim_matches(|character: char| matches!(character, '(' | ')' | ';'))
@@ -618,7 +1033,8 @@ fn parse_attribute(statement: &str) -> Option<Attribute> {
         name: name.to_owned(),
         type_name,
         optional,
-        aggregate,
+        aggregate: !aggregation.is_empty(),
+        aggregation,
     })
 }
 
