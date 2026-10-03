@@ -6,6 +6,40 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-03
+
+### Added
+
+- `ParseOptions::accept_real_without_point`: a data-section real written
+  without the decimal point ISO 10303-21 requires before its exponent
+  (`1E-05`, `-2E3`, `3e+2`, `+4E0`) is read as the real it means, with the
+  point inserted (`1.E-05`), and reported as one
+  `DiagnosticKind::RealWithoutPoint` warning over the number's bytes. The
+  stored value carries the point, so the writer emits valid Part 21.
+  Incomplete numbers (`1E`, `1E-`, `1EE2`, `.5E2`) stay errors, strings are
+  never touched, and the header stays strict. buildingSMART's own IFC4.x
+  alignment test files write such reals.
+- `StepError::is_real_without_point`: strict parsing refuses such a number
+  with this typed error, its span covering exactly the number and its
+  detail quoting it. Before, the error was a generic syntax error whose
+  span ended at the `E`.
+- Lazy decoding under options: `decode_record_with`,
+  `decode_record_borrowed_with` and `Scan::decode_with` return the record
+  exactly as `parse_with` reads it with the same options, plus that
+  record's diagnostics. `decode_record` and `decode_record_borrowed` stay
+  strict.
+
+### Changed
+
+- `ParseOptions::lenient()` also accepts reals without a decimal point: a
+  lenient parse now keeps such a record with a warning instead of skipping
+  it. `ParseOptions::strict().on_malformed_record(OnMalformed::Skip)` keeps
+  the old behaviour.
+
+The common number path is unchanged; the new handling is out of line.
+Measured on a 109 MB Revit IFC and a 102 MB STEP file against 0.10.0:
++0.3% and +0.6% user-space instructions for a strict parse.
+
 ## [0.10.0] - 2026-09-28
 
 ### Added
@@ -408,7 +442,8 @@ slots) and are pinned in `tests/schema_graph.rs`.
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
 
-[Unreleased]: https://github.com/openbimrs/step/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/openbimrs/step/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/openbimrs/step/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/openbimrs/step/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/openbimrs/step/compare/v0.7.0...v0.8.0
