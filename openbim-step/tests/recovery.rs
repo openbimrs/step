@@ -227,7 +227,9 @@ fn a_data_section_of_only_damage_yields_an_empty_model_and_diagnostics() {
 fn options_are_composable_and_strict_by_default() {
     assert_eq!(ParseOptions::default(), ParseOptions::strict());
     assert_eq!(
-        ParseOptions::default().on_malformed_record(OnMalformed::Skip),
+        ParseOptions::default()
+            .on_malformed_record(OnMalformed::Skip)
+            .accept_real_without_point(true),
         ParseOptions::lenient()
     );
     assert_eq!(OnMalformed::default(), OnMalformed::Abort);

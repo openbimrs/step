@@ -24,6 +24,12 @@ Generic ISO 10303-21 physical-file and ISO 10303-11 EXPRESS language infrastruct
   because they move `parse` and `scan` together;
 - performance work is measured, not assumed: equivalence against the last
   release plus instruction counts (the dev VM is shared and noisy);
+- opt-in acceptance of reals without a decimal point
+  (`ParseOptions::accept_real_without_point`, in `lenient()`): data section
+  only, point inserted into the stored value, one warning per number, the
+  same in eager, lazy (`decode_record_with`) and parallel parsing
+  (`tests/real_without_point.rs`). Its lexer path is `#[cold]` and out of
+  line so the common number path stays as measured;
 - opt-in Part 21 reference integrity (duplicate ids, dangling references) as
   non-fatal diagnostics, in `src/references.rs` — syntax-level only, never
   schema-aware;

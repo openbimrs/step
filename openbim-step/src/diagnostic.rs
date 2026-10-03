@@ -120,6 +120,7 @@ pub struct StepError {
 enum ErrorKind {
     NotStep,
     Syntax,
+    RealWithoutPoint,
     InvalidArgument,
 }
 
@@ -140,6 +141,14 @@ impl StepError {
         }
     }
 
+    pub(crate) fn real_without_point(span: Span, token: &str) -> Self {
+        Self {
+            span,
+            detail: format!("real {token} has no decimal point before its exponent"),
+            kind: ErrorKind::RealWithoutPoint,
+        }
+    }
+
     pub(crate) fn invalid_argument(detail: impl Into<String>) -> Self {
         Self {
             span: Span::new(0, 0),
@@ -152,6 +161,17 @@ impl StepError {
     #[must_use]
     pub const fn is_not_step(&self) -> bool {
         matches!(self.kind, ErrorKind::NotStep)
+    }
+
+    /// Returns whether the failure is a real written without the decimal
+    /// point ISO 10303-21 requires before its exponent, such as `1E-05`.
+    ///
+    /// [`Self::span`] covers exactly the number, and [`Self::detail`] quotes
+    /// it. [`ParseOptions::accept_real_without_point`](crate::ParseOptions::accept_real_without_point)
+    /// reads such numbers as reals instead.
+    #[must_use]
+    pub const fn is_real_without_point(&self) -> bool {
+        matches!(self.kind, ErrorKind::RealWithoutPoint)
     }
 
     /// Byte span associated with the failure.
@@ -171,7 +191,7 @@ impl fmt::Display for StepError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
             ErrorKind::NotStep => write!(formatter, "not a STEP physical file: {}", self.detail),
-            ErrorKind::Syntax => write!(
+            ErrorKind::Syntax | ErrorKind::RealWithoutPoint => write!(
                 formatter,
                 "STEP syntax error at bytes {}..{}: {}",
                 self.span.start, self.span.end, self.detail

@@ -370,6 +370,7 @@ pub(crate) fn parse_chunk(
     let mut parser = Parser::new(input);
     parser.options = options;
     parser.phase = Phase::Data;
+    parser.enter_data();
     parser.lexer.resume_at(start);
     parser.last_end = start;
     parser.record_spans = Some(Vec::new());
@@ -398,7 +399,8 @@ const RECORD_SCRATCH: usize = 32;
 fn parse_record_at<'a, S: Text<'a>>(
     input: &'a [u8],
     span: Span,
-) -> Result<DataRecord<S>, StepError> {
+    options: ParseOptions,
+) -> Result<(DataRecord<S>, Vec<Diagnostic>), StepError> {
     if span.start > span.end || span.end > input.len() {
         return Err(StepError::invalid_argument(format!(
             "record span {}..{} is outside the {}-byte input",
@@ -412,7 +414,9 @@ fn parse_record_at<'a, S: Text<'a>>(
     // instead of regrowing the stack from empty for each decoded record.
     parser.scratch = Vec::with_capacity(RECORD_SCRATCH);
     parser.names = S::record_names();
+    parser.options = options;
     parser.phase = Phase::Data;
+    parser.enter_data();
     parser.lexer.resume_at(span.start);
     parser.last_end = span.start;
     let token = parser
@@ -428,12 +432,17 @@ fn parse_record_at<'a, S: Text<'a>>(
             "data record does not end at the end of its span",
         ));
     }
-    Ok(record)
+    parser.take_reals_without_point();
+    Ok((record, parser.diagnostics))
 }
 
 /// [`parse_record_at`] with owned text, as [`parse`] returns it.
-pub(crate) fn decode_owned(input: &[u8], span: Span) -> Result<DataRecord, StepError> {
-    parse_record_at(input, span)
+pub(crate) fn decode_owned(
+    input: &[u8],
+    span: Span,
+    options: ParseOptions,
+) -> Result<(DataRecord, Vec<Diagnostic>), StepError> {
+    parse_record_at(input, span, options)
 }
 
 /// [`parse_record_at`] with text borrowed where it can be, as
@@ -441,8 +450,9 @@ pub(crate) fn decode_owned(input: &[u8], span: Span) -> Result<DataRecord, StepE
 pub(crate) fn decode_borrowed(
     input: &[u8],
     span: Span,
-) -> Result<DataRecord<Cow<'_, str>>, StepError> {
-    parse_record_at(input, span)
+    options: ParseOptions,
+) -> Result<(DataRecord<Cow<'_, str>>, Vec<Diagnostic>), StepError> {
+    parse_record_at(input, span, options)
 }
 
 impl<'a, S: Text<'a>> Parser<'a, S> {
@@ -462,6 +472,31 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
             record_spans: None,
             scratch: Vec::new(),
             names: S::names(),
+        }
+    }
+
+    /// Applies the data-section-only options to the lexer. Called wherever
+    /// the parser starts reading data records, so the header stays strict.
+    fn enter_data(&mut self) {
+        self.lexer
+            .accept_real_without_point(self.options.accept_real_without_point);
+    }
+
+    /// Reports the reals the lexer read without a decimal point since the
+    /// last call, at the end of the record that holds them.
+    #[inline]
+    fn take_reals_without_point(&mut self) {
+        if self.lexer.has_reals_without_point() {
+            self.report_reals_without_point();
+        }
+    }
+
+    #[cold]
+    fn report_reals_without_point(&mut self) {
+        for span in self.lexer.take_reals_without_point() {
+            let token = String::from_utf8_lossy(&self.input[span.start..span.end]);
+            self.diagnostics
+                .push(Diagnostic::real_without_point(span, &token));
         }
     }
 
@@ -526,6 +561,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                     }
                     self.expect_semicolon("after DATA")?;
                     self.phase = Phase::Data;
+                    self.enter_data();
                     sink.event(Event::StartData);
                     if self.stop == Stop::AfterDataStart {
                         self.stopped = Some(self.lexer.offset());
@@ -580,6 +616,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                     let start = token.span.start;
                     match self.parse_data_record(&id, token.span) {
                         Ok(record) => {
+                            self.take_reals_without_point();
                             if let Some(check) = &mut self.references {
                                 let span = Span::new(start, self.last_end);
                                 check.record(&record, span, &mut self.diagnostics);
@@ -688,6 +725,9 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
             return Err(error);
         }
         let start = record_start.unwrap_or_else(|| error.span().start);
+        // Reals repaired in the record being dropped are not reported: the
+        // skipped-record diagnostic covers their bytes.
+        self.lexer.discard_reals_without_point();
         // Resynchronize from just past the record's first byte, NOT from the
         // end of the error span. A diagnostic can legitimately span the token
         // that follows the damage -- including `ENDSEC` -- and resuming past

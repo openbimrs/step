@@ -22,7 +22,7 @@
 
 use crate::lexer::{Lexer, Token};
 use crate::parser::{decode_borrowed, decode_owned, parse_prefix};
-use crate::{DataRecord, HeaderSection, InstanceId, ParseOptions, Span, StepError};
+use crate::{DataRecord, Diagnostic, HeaderSection, InstanceId, ParseOptions, Span, StepError};
 use std::borrow::Cow;
 
 /// A data section indexed by [`scan`]: the parsed header and an iterator
@@ -107,6 +107,19 @@ impl<'a> Scan<'a> {
     pub fn decode(&self, record: &ScannedRecord<'_>) -> Result<DataRecord, StepError> {
         decode_record(self.input, record.span)
     }
+
+    /// [`Self::decode`] under `options`, as [`parse_with`](crate::parse_with)
+    /// reads the record, with the record's diagnostics.
+    /// # Errors
+    ///
+    /// Returns the syntax error inside the record, if any.
+    pub fn decode_with(
+        &self,
+        record: &ScannedRecord<'_>,
+        options: ParseOptions,
+    ) -> Result<(DataRecord, Vec<Diagnostic>), StepError> {
+        decode_record_with(self.input, record.span, options)
+    }
 }
 
 /// Parses the data record that occupies exactly `span` of `input`, with
@@ -120,7 +133,26 @@ impl<'a> Scan<'a> {
 /// Returns a syntax error for a malformed record, a span that does not start
 /// at `#`, or a record that does not end exactly at `span.end`.
 pub fn decode_record(input: &[u8], span: Span) -> Result<DataRecord, StepError> {
-    decode_owned(input, span)
+    decode_owned(input, span, ParseOptions::strict()).map(|(record, _)| record)
+}
+
+/// [`decode_record`] under `options`: the record exactly as
+/// [`parse_with`](crate::parse_with) reads it with the same options, and the
+/// diagnostics that parse reports for it.
+///
+/// Only the options that act inside one record apply:
+/// [`ParseOptions::accept_real_without_point`] does, while skipping a
+/// malformed record and checking references need the whole data section and
+/// do not. A malformed record is therefore always an error here.
+/// # Errors
+///
+/// The same errors as [`decode_record`], except those the options accept.
+pub fn decode_record_with(
+    input: &[u8],
+    span: Span,
+    options: ParseOptions,
+) -> Result<(DataRecord, Vec<Diagnostic>), StepError> {
+    decode_owned(input, span, options)
 }
 
 /// [`decode_record`] with text borrowed from `input` wherever it needs no
@@ -133,7 +165,19 @@ pub fn decode_record_borrowed(
     input: &[u8],
     span: Span,
 ) -> Result<DataRecord<Cow<'_, str>>, StepError> {
-    decode_borrowed(input, span)
+    decode_borrowed(input, span, ParseOptions::strict()).map(|(record, _)| record)
+}
+
+/// [`decode_record_borrowed`] under `options`; see [`decode_record_with`].
+/// # Errors
+///
+/// The same errors as [`decode_record_with`].
+pub fn decode_record_borrowed_with(
+    input: &[u8],
+    span: Span,
+    options: ParseOptions,
+) -> Result<(DataRecord<Cow<'_, str>>, Vec<Diagnostic>), StepError> {
+    decode_borrowed(input, span, options)
 }
 
 /// Iterator over framed data records; see [`Scan::records`].

@@ -36,6 +36,10 @@ pub struct ParseOptions {
     /// Whether to report duplicate instance ids and references to ids that
     /// are never defined. Off by default: strict parsing means syntax only.
     pub check_references: bool,
+    /// Whether a data-section real written without its decimal point
+    /// (`1E-05`) is read as a real. Off by default; see
+    /// [`Self::accept_real_without_point`].
+    pub accept_real_without_point: bool,
 }
 
 impl ParseOptions {
@@ -45,15 +49,19 @@ impl ParseOptions {
         Self {
             on_malformed_record: OnMalformed::Abort,
             check_references: false,
+            accept_real_without_point: false,
         }
     }
 
-    /// Options that skip and report malformed data records.
+    /// Options that skip and report malformed data records, and read reals
+    /// written without their decimal point (see
+    /// [`Self::accept_real_without_point`]).
     #[must_use]
     pub const fn lenient() -> Self {
         Self {
             on_malformed_record: OnMalformed::Skip,
             check_references: false,
+            accept_real_without_point: true,
         }
     }
 
@@ -80,6 +88,29 @@ impl ParseOptions {
     #[must_use]
     pub const fn check_references(mut self, enabled: bool) -> Self {
         self.check_references = enabled;
+        self
+    }
+
+    /// Enables or disables reading reals written without a decimal point.
+    ///
+    /// ISO 10303-21 writes a real as `[sign] digits "." [digits]
+    /// [exponent]`, but some exporters omit the point before an exponent
+    /// (`1E-05`, `-2E3`, `3e+2`), including buildingSMART's own IFC4.x
+    /// alignment test files. Strict parsing refuses such a number with an
+    /// error for which [`StepError::is_real_without_point`](crate::StepError::is_real_without_point)
+    /// holds. When enabled, a data record keeps it as the real it means,
+    /// with the point inserted (`1.E-05`), and yields one
+    /// [`DiagnosticKind::RealWithoutPoint`] over the number's bytes. The
+    /// stored value carries the point, so writing the model back produces
+    /// valid Part 21.
+    ///
+    /// Only complete numbers are read: `1E`, `1E-` and `1EE2` stay errors,
+    /// as do numbers without leading digits such as `.5E2`. Text inside
+    /// strings is never touched. The header section stays strict, as it does
+    /// for every other recovery.
+    #[must_use]
+    pub const fn accept_real_without_point(mut self, enabled: bool) -> Self {
+        self.accept_real_without_point = enabled;
         self
     }
 }
@@ -110,6 +141,11 @@ pub enum DiagnosticKind {
     DuplicateId,
     /// A data record references an instance id that no record defines.
     DanglingReference,
+    /// A real written without the decimal point ISO 10303-21 requires
+    /// before its exponent was read as a real, under
+    /// [`ParseOptions::accept_real_without_point`]. The record is kept, with
+    /// the point inserted; the span covers the number as written.
+    RealWithoutPoint,
 }
 
 /// A non-fatal problem found while parsing.
@@ -130,6 +166,18 @@ impl Diagnostic {
             span,
             instance: None,
             detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn real_without_point(span: Span, token: &str) -> Self {
+        Self {
+            severity: Severity::Warning,
+            kind: DiagnosticKind::RealWithoutPoint,
+            span,
+            instance: None,
+            detail: format!(
+                "real {token} has no decimal point before its exponent; read as a real"
+            ),
         }
     }
 
@@ -168,7 +216,7 @@ impl Diagnostic {
     /// The instance id at fault. For a duplicate it is the later record's id
     /// as written; for a dangling reference it is the missing id in canonical
     /// form (leading zeros removed, since `#07` and `#7` are the same
-    /// instance). `None` for a skipped record.
+    /// instance). `None` for a skipped record and a real without a point.
     #[must_use]
     pub const fn instance(&self) -> Option<&InstanceId> {
         self.instance.as_ref()

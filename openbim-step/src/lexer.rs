@@ -68,6 +68,13 @@ pub struct Lexer<'a> {
     /// token started. Lets [`Self::number_bytes`] borrow the lexeme without
     /// rescanning it; only `lex_number` resets and reads it.
     dirty: bool,
+    /// Whether a real written without its decimal point (`1E-05`) is read
+    /// as the real it means instead of refused. Off unless the parser
+    /// enables it for the data section.
+    accept_real_without_point: bool,
+    /// Spans of the reals accepted that way, in source order, until the
+    /// parser takes them as diagnostics.
+    reals_without_point: Vec<Span>,
 }
 
 fn is_valid_binary(body: &[u8]) -> bool {
@@ -182,7 +189,35 @@ impl<'a> Lexer<'a> {
             position: 0,
             finished: false,
             dirty: false,
+            accept_real_without_point: false,
+            reals_without_point: Vec::new(),
         }
+    }
+
+    /// Reads `digits [exponent]` without a decimal point as a real, with the
+    /// point inserted, and records its span; see
+    /// [`ParseOptions::accept_real_without_point`](crate::ParseOptions::accept_real_without_point).
+    pub(crate) fn accept_real_without_point(&mut self, accept: bool) {
+        self.accept_real_without_point = accept;
+    }
+
+    /// Whether a real was accepted without a decimal point since the last
+    /// [`Self::take_reals_without_point`].
+    #[inline]
+    pub(crate) fn has_reals_without_point(&self) -> bool {
+        !self.reals_without_point.is_empty()
+    }
+
+    /// Takes the spans of the reals accepted without a decimal point since
+    /// the last call.
+    pub(crate) fn take_reals_without_point(&mut self) -> Vec<Span> {
+        std::mem::take(&mut self.reals_without_point)
+    }
+
+    /// Forgets the reals accepted without a decimal point since the last
+    /// [`Self::take_reals_without_point`]: their record was dropped.
+    pub(crate) fn discard_reals_without_point(&mut self) {
+        self.reals_without_point.clear();
     }
 
     /// Current byte offset.
@@ -721,10 +756,7 @@ impl<'a> Lexer<'a> {
         }
         if matches!(self.input.get(self.position), Some(b'e' | b'E')) {
             if !real {
-                return Err(StepError::syntax(
-                    Span::new(start, self.position + 1),
-                    "real requires a decimal point before its exponent",
-                ));
+                return self.real_without_point(start);
             }
             self.position += 1;
             self.skip_ignored_controls();
@@ -744,6 +776,43 @@ impl<'a> Lexer<'a> {
         } else {
             Token::Integer(text)
         })
+    }
+
+    /// `[sign] digits` at `start..self.position`, followed by an exponent
+    /// marker instead of a decimal point. ISO 10303-21 requires the point, so
+    /// a complete number is refused unless the parser accepts it; then it
+    /// becomes the real it means, with the point inserted so the value
+    /// round-trips as valid Part 21. An incomplete exponent is an error
+    /// either way. Out of line so that the common number path is unchanged.
+    #[cold]
+    #[inline(never)]
+    fn real_without_point(&mut self, start: usize) -> Result<Token<'a>, StepError> {
+        self.position += 1;
+        self.skip_ignored_controls();
+        if matches!(self.input.get(self.position), Some(b'+' | b'-')) {
+            self.position += 1;
+        }
+        if self.digits() == 0 {
+            return Err(StepError::syntax(
+                Span::new(start, self.position),
+                "real exponent has no digits",
+            ));
+        }
+        let span = Span::new(start, self.position);
+        let mut text = self.number_bytes(start).into_owned();
+        if !self.accept_real_without_point {
+            return Err(StepError::real_without_point(
+                span,
+                &String::from_utf8_lossy(&text),
+            ));
+        }
+        let exponent = text
+            .iter()
+            .position(|byte| matches!(byte, b'e' | b'E'))
+            .expect("an exponent was lexed");
+        text.insert(exponent, b'.');
+        self.reals_without_point.push(span);
+        Ok(Token::Real(Cow::Owned(text)))
     }
 }
 
