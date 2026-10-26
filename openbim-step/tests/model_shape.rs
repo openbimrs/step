@@ -94,7 +94,7 @@ fn str_behaves_like_the_text_it_holds() {
     assert_eq!(Str::from(std::sync::Arc::<str>::from("abc")), short);
     assert!(!Str::from("x".repeat(22)).is_shared());
     assert!(Str::from("x".repeat(23)).is_shared());
-    assert!(Str::from("é".repeat(11)).as_str().chars().count() == 11);
+    assert_eq!(Str::from("é".repeat(11)).as_str().chars().count(), 11);
     assert_eq!(short.cmp(&Str::from("abd")), std::cmp::Ordering::Less);
 }
 

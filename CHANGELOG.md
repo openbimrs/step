@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Changed
+
+- Raise MSRV to Rust 1.99.
+
 ## [0.11.0] - 2026-10-03
 
 ### Added

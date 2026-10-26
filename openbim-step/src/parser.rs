@@ -352,7 +352,7 @@ pub(crate) fn parse_prefix(
             header.records.push(record);
         }
     })?;
-    debug_assert!(parser.diagnostics.is_empty());
+    debug_assert_eq!(parser.diagnostics, [] as [crate::recovery::Diagnostic; 0]);
     Ok(parser.stopped.map(|offset| (header, offset)))
 }
 

@@ -43,8 +43,14 @@ fn kinds(diagnostics: &[Diagnostic]) -> Vec<(DiagnosticKind, String)> {
 #[test]
 fn reference_defects_are_silent_unless_checking_is_requested() {
     let records = "#1=A(#9);\n#2=B(1);\n#2=C(2);";
-    assert!(run(records, ParseOptions::strict()).1.is_empty());
-    assert!(run(records, ParseOptions::lenient()).1.is_empty());
+    assert_eq!(
+        run(records, ParseOptions::strict()).1,
+        [] as [openbim_step::Diagnostic; 0]
+    );
+    assert_eq!(
+        run(records, ParseOptions::lenient()).1,
+        [] as [openbim_step::Diagnostic; 0]
+    );
     let (_, diagnostics) = run(records, checked());
     assert_eq!(
         kinds(&diagnostics),

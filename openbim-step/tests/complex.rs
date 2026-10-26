@@ -226,7 +226,7 @@ fn an_empty_set_is_empty_and_valid() {
     let g = graph();
     let layout = g.resolve_complex(&[]);
     assert!(layout.parts().is_empty());
-    assert!(layout.types().is_empty());
+    assert_eq!(layout.types(), [] as [&str; 0]);
     assert!(layout.is_valid());
 }
 

@@ -97,7 +97,10 @@ fn the_lenient_preset_accepts_them_instead_of_skipping_the_record() {
     // Skipping alone, without accepting, still loses the record.
     let skipping = ParseOptions::strict().on_malformed_record(OnMalformed::Skip);
     let outcome = parse_with(input.as_bytes(), skipping).expect("skip");
-    assert!(outcome.exchange.data.records.is_empty());
+    assert_eq!(
+        outcome.exchange.data.records,
+        [] as [openbim_step::DataRecord; 0]
+    );
     assert_eq!(outcome.diagnostics[0].kind(), DiagnosticKind::SkippedRecord);
 }
 
@@ -116,7 +119,7 @@ fn text_and_well_formed_numbers_are_untouched() {
     let strict = parse(input.as_bytes()).expect("valid Part 21");
     let outcome = parse_with(input.as_bytes(), accepting()).expect("accepting");
     assert_eq!(outcome.exchange, strict);
-    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(outcome.diagnostics, [] as [openbim_step::Diagnostic; 0]);
     let record = strict.data.records[0].as_simple().expect("simple");
     assert_eq!(record.parameters[0], Parameter::Text("1E-05".into()));
 }

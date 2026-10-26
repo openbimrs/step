@@ -219,7 +219,10 @@ fn a_data_section_of_only_damage_yields_an_empty_model_and_diagnostics() {
     let input = exchange("#1 IFCPERSON($,$,'a',$,$,$,$,$);\n#2 IFCORGANIZATION($,'o',$,$,$);");
     let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).expect("recovery");
 
-    assert!(outcome.exchange.data.records.is_empty());
+    assert_eq!(
+        outcome.exchange.data.records,
+        [] as [openbim_step::DataRecord; 0]
+    );
     assert_eq!(outcome.diagnostics.len(), 2);
 }
 

@@ -138,7 +138,7 @@ END_SCHEMA;
         .iter()
         .find(|entity| entity.name == "parent")
         .expect("parent entity");
-    assert!(parent.derived.is_empty());
+    assert_eq!(parent.derived, [] as [std::string::String; 0]);
 }
 
 /// A derived attribute that is not a redeclaration has no qualifying prefix.
@@ -423,7 +423,7 @@ fn every_declared_supertype_is_recorded_in_order() {
     assert_eq!(c.supertypes, ["a", "b"]);
     assert_eq!(c.supertype(), Some("a"));
     let top = parsed.entities.iter().find(|e| e.name == "top").unwrap();
-    assert!(top.supertypes.is_empty());
+    assert_eq!(top.supertypes, [] as [std::string::String; 0]);
     assert_eq!(top.supertype(), None);
 }
 
@@ -565,7 +565,10 @@ fn aggregation_levels_keep_kind_bounds_and_uniqueness_outermost_first() {
         attribute(owner, "Pairs").aggregation[0].kind,
         AggregateKind::Bag
     );
-    assert!(attribute(owner, "Degree").aggregation.is_empty());
+    assert_eq!(
+        attribute(owner, "Degree").aggregation,
+        [] as [openbim_step::express::Aggregation; 0]
+    );
     assert!(!attribute(owner, "Degree").aggregate);
 }
 
@@ -596,7 +599,10 @@ fn inverse_attributes_record_target_for_attribute_and_bounds() {
     assert_eq!(special.inverses.len(), 1);
     assert_eq!(special.inverses[0].name, "Parts");
     assert_eq!(special.inverses[0].redeclares.as_deref(), Some("Owner"));
-    assert!(special.attributes.is_empty());
+    assert_eq!(
+        special.attributes,
+        [] as [openbim_step::express::Attribute; 0]
+    );
 }
 
 #[test]

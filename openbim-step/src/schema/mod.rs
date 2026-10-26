@@ -469,7 +469,7 @@ END_SCHEMA;";
         let schema = SchemaGraph::from_express(TREE);
         assert_eq!(schema.direct_subtypes("root"), ["Door", "Wall"]);
         assert!(schema.direct_subtypes("Door").is_empty(), "a leaf");
-        assert!(schema.direct_subtypes("NotAThing").is_empty());
+        assert_eq!(schema.direct_subtypes("NotAThing"), [] as [&str; 0]);
     }
 
     #[test]

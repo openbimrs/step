@@ -35,7 +35,7 @@ fn partitions_are_nonempty_record_aligned_and_complete() {
     let mut ids = Vec::new();
     for partition in &partitions {
         let local = data_record_spans(&INPUT[partition.start..partition.end]).unwrap();
-        assert!(!local.is_empty());
+        assert_ne!(local, [] as [openbim_step::Span; 0]);
         for span in local {
             let record = &INPUT[partition.start + span.start..partition.start + span.end];
             let hash = record.iter().position(|byte| *byte == b'#').unwrap();
