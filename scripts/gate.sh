@@ -22,5 +22,16 @@ test -d "$package_root" || {
   exit 1
 }
 test -f "$package_root/README.md"
-test -f "$package_root/LICENSE"
+# The crate is `AGPL-3.0-or-later OR LicenseRef-Commercial`: its archive
+# ships byte-identical copies of the root licence texts and notice.
+for f in LICENSE NOTICE LICENSES/LicenseRef-Commercial.txt; do
+  cmp -s "$f" "$package_root/$f" || {
+    echo "packaged crate: $f is missing or differs from the root" >&2
+    exit 1
+  }
+done
+grep -qx 'license = "AGPL-3.0-or-later OR LicenseRef-Commercial"' "$package_root/Cargo.toml" || {
+  echo "packaged crate: unexpected license expression" >&2
+  exit 1
+}
 cargo test --manifest-path "$package_root/Cargo.toml" --locked

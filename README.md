@@ -24,4 +24,4 @@ validation remain future work. IFC-specific graph mapping and policy live in
 bash scripts/gate.sh
 ```
 
-AGPL-3.0-or-later licensed.
+Dual-licensed `AGPL-3.0-or-later OR LicenseRef-Commercial`; see [LICENSING.md](LICENSING.md).
