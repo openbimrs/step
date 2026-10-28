@@ -1,0 +1,14 @@
+OpenBIM.rs commercial licence option
+
+This software is offered under the GNU Affero General Public License,
+version 3 or any later version (AGPL-3.0-or-later), or, as an alternative, under a
+commercial licence.
+
+A commercial licence is granted only by a separate written agreement with
+the copyright holder named in the NOTICE file. Its terms (including any fee,
+scope, duration and right to sublicense) are those of that agreement. This
+file grants no rights by itself; without such an agreement, the software is
+available to you under AGPL-3.0-or-later only.
+
+To ask for a commercial licence, contact the copyright holder through
+https://github.com/openbimrs.

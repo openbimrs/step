@@ -6,8 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-28
+
 ### Changed
 
+- Licence: `AGPL-3.0-or-later OR LicenseRef-Commercial` (was
+  `AGPL-3.0-or-later`); a commercial licence is available from the copyright
+  holder named in `NOTICE`. See LICENSING.md. The crate ships `LICENSE`,
+  `NOTICE` and `LICENSES/LicenseRef-Commercial.txt`.
 - Raise MSRV to Rust 1.99.
 
 ## [0.11.0] - 2026-10-03
@@ -446,7 +452,8 @@ slots) and are pinned in `tests/schema_graph.rs`.
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
 
-[Unreleased]: https://github.com/openbimrs/step/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/openbimrs/step/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/openbimrs/step/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/openbimrs/step/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/openbimrs/step/compare/v0.8.0...v0.9.0

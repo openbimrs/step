@@ -3,10 +3,10 @@ members = ["openbim-step"]
 resolver = "2"
 
 [workspace.package]
-version = "0.11.0"
+version = "0.11.1"
 edition = "2021"
 rust-version = "1.99"
-license = "AGPL-3.0-or-later"
+license = "AGPL-3.0-or-later OR LicenseRef-Commercial"
 authors = ["Friedrich Schrödter"]
 repository = "https://github.com/openbimrs/step"
 
