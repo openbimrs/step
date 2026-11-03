@@ -526,7 +526,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                 Err(error) => {
                     // A lexical defect inside DATA is recoverable: the damaged
                     // bytes belong to one record, not to the file structure.
-                    self.recover_or_fail(error, None)?;
+                    self.recover_or_fail(error, None, None)?;
                     continue;
                 }
             };
@@ -626,7 +626,11 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                             }
                             sink.event(Event::DataRecord(record));
                         }
-                        Err(error) => self.recover_or_fail(error, Some(start))?,
+                        Err(error) => self.recover_or_fail(
+                            error,
+                            Some(start),
+                            InstanceId::from_ascii_digits(&id),
+                        )?,
                     }
                 }
                 _ => {
@@ -634,7 +638,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                         token.span,
                         format!("unexpected token {:?} in {:?}", token.value, self.phase),
                     );
-                    self.recover_or_fail(error, Some(token.span.start))?;
+                    self.recover_or_fail(error, Some(token.span.start), None)?;
                 }
             }
         }
@@ -716,10 +720,13 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
     /// fatal under every policy: they describe the file, not one payload
     /// record, and silently continuing past them would produce a model whose
     /// provenance is unknown.
+    ///
+    /// `instance` is the record's id when its `#id` token was read.
     fn recover_or_fail(
         &mut self,
         error: StepError,
         record_start: Option<usize>,
+        instance: Option<InstanceId>,
     ) -> Result<(), StepError> {
         if self.options.on_malformed_record != OnMalformed::Skip || self.phase != Phase::Data {
             return Err(error);
@@ -739,6 +746,7 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
         self.diagnostics.push(Diagnostic::skipped_record(
             Span::new(start, resume),
             format!("skipped malformed data record: {}", error.detail()),
+            instance,
         ));
         Ok(())
     }

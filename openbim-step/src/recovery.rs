@@ -159,12 +159,16 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    pub(crate) fn skipped_record(span: Span, detail: impl Into<String>) -> Self {
+    pub(crate) fn skipped_record(
+        span: Span,
+        detail: impl Into<String>,
+        instance: Option<InstanceId>,
+    ) -> Self {
         Self {
             severity: Severity::Warning,
             kind: DiagnosticKind::SkippedRecord,
             span,
-            instance: None,
+            instance,
             detail: detail.into(),
         }
     }
@@ -216,7 +220,15 @@ impl Diagnostic {
     /// The instance id at fault. For a duplicate it is the later record's id
     /// as written; for a dangling reference it is the missing id in canonical
     /// form (leading zeros removed, since `#07` and `#7` are the same
-    /// instance). `None` for a skipped record and a real without a point.
+    /// instance); for a skipped record it is its id as written when the
+    /// `#id` token was read. `None` for a skipped record whose id was not
+    /// read, and for a real without a point.
+    ///
+    /// A skipped record's id is that of the record where the damage started.
+    /// Its span can cover further records, whose ids are not reported, and
+    /// the id is the token that was read, not a guarantee that no kept
+    /// record uses it. Compare it with a dangling reference's id after
+    /// removing leading zeros.
     #[must_use]
     pub const fn instance(&self) -> Option<&InstanceId> {
         self.instance.as_ref()
