@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-11-03
+
+### Changed
+
+- A `SkippedRecord` diagnostic now reports the record's instance id through
+  `Diagnostic::instance()` when its `#id` token was read, as written (leading
+  zeros kept). A record skipped before any `#id` was read still reports
+  `None`. Sequential and parallel parses agree (#17). When one skip covers
+  several records, only the first id is reported.
+
 ## [0.11.2] - 2026-10-28
 
 ### Changed
@@ -459,7 +469,8 @@ slots) and are pinned in `tests/schema_graph.rs`.
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
 
-[Unreleased]: https://github.com/openbimrs/step/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.11.3...HEAD
+[0.11.3]: https://github.com/openbimrs/step/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/openbimrs/step/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/openbimrs/step/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/openbimrs/step/compare/v0.10.0...v0.11.0
