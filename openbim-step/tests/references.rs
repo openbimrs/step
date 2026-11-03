@@ -147,7 +147,7 @@ fn a_reference_to_a_skipped_record_is_dangling() {
     assert_eq!(
         kinds(&outcome.diagnostics),
         [
-            (DiagnosticKind::SkippedRecord, String::new()),
+            (DiagnosticKind::SkippedRecord, "1".to_owned()),
             (DiagnosticKind::DanglingReference, "1".to_owned()),
         ]
     );
@@ -184,12 +184,56 @@ fn the_event_api_reports_the_same_diagnostics() {
     assert_eq!(diagnostics, owned);
 }
 
+/// A skipped record whose `#id` was read reports that id as written, so a
+/// consumer can name it and keep it from being reused.
 #[test]
-fn skipped_record_diagnostics_have_their_kind_and_no_instance() {
-    let input = exchange("#1=A(@);");
+fn skipped_record_diagnostics_have_their_kind_and_the_id_as_written() {
+    for (records, id) in [
+        ("#1=A(@);", "1"),
+        ("#17\n XXSITE('a',$);", "17"),
+        ("#007=A(,);", "007"),
+    ] {
+        let input = exchange(records);
+        let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
+        assert_eq!(outcome.diagnostics[0].kind(), DiagnosticKind::SkippedRecord);
+        assert_eq!(
+            outcome.diagnostics[0].instance().map(InstanceId::as_str),
+            Some(id),
+            "{records}"
+        );
+    }
+}
+
+/// A record skipped before any `#id` was read has no instance: an
+/// unexpected token, or a lexical defect at the record's first byte.
+#[test]
+fn a_skipped_record_without_an_id_has_no_instance() {
+    for records in ["A(1);\n#2=B();", "@;\n#2=B();"] {
+        let input = exchange(records);
+        let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
+        assert_eq!(outcome.diagnostics[0].kind(), DiagnosticKind::SkippedRecord);
+        assert_eq!(
+            outcome.diagnostics[0].instance(),
+            None::<&InstanceId>,
+            "{records}"
+        );
+        assert_eq!(outcome.exchange.data.records.len(), 1, "{records}");
+    }
+}
+
+/// A record missing its `;` swallows the next one: one diagnostic, naming
+/// only the first id, with a span over both.
+#[test]
+fn a_skip_over_several_records_names_only_the_first() {
+    let input = exchange("#1=A(1)\n#2=B();\n#3=C();");
     let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
-    assert_eq!(outcome.diagnostics[0].kind(), DiagnosticKind::SkippedRecord);
-    assert_eq!(outcome.diagnostics[0].instance(), None::<&InstanceId>);
+    assert_eq!(
+        kinds(&outcome.diagnostics),
+        [(DiagnosticKind::SkippedRecord, "1".to_owned())]
+    );
+    let span = outcome.diagnostics[0].span();
+    assert!(input[span.start..span.end].contains("#2=B();"));
+    assert_eq!(outcome.exchange.data.records.len(), 1);
 }
 
 /// One aggregation record forward-referencing many ids must stay linear:

@@ -130,6 +130,13 @@ fn skipped_and_duplicate_diagnostics_interleave_in_source_order() {
         .collect();
     // Guard: the fixture really interleaves skip and duplicate diagnostics.
     assert_ne!(kinds[0], kinds[1], "fixture does not interleave: {kinds:?}");
+    // A skipped record reports its id, which the parallel parse must keep.
+    assert_eq!(
+        sequential.diagnostics[0]
+            .instance()
+            .map(openbim_step::InstanceId::as_str),
+        Some("10010")
+    );
     assert_same(out.as_bytes(), "interleaved diagnostics");
 }
 
