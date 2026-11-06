@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-11-06
+
 ### Added
 
 - `EventSink::data_record(record, span)`: a provided method that gives a sink
@@ -485,7 +487,8 @@ slots) and are pinned in `tests/schema_graph.rs`.
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
 
-[Unreleased]: https://github.com/openbimrs/step/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.11.4...HEAD
+[0.11.4]: https://github.com/openbimrs/step/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/openbimrs/step/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/openbimrs/step/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/openbimrs/step/compare/v0.11.0...v0.11.1
