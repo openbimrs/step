@@ -1,0 +1,24 @@
+name: Cloud setup checks
+on:
+  pull_request:
+    paths: [scripts/cloud-setup.sh, scripts/test-cloud-setup.py, .github/workflows/cloud-setup.yml]
+  push:
+    branches: [main]
+    paths: [scripts/cloud-setup.sh, scripts/test-cloud-setup.py, .github/workflows/cloud-setup.yml]
+permissions:
+  contents: read
+jobs:
+  bootstrap:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash -n scripts/cloud-setup.sh
+      - run: python3 scripts/test-cloud-setup.py
+  image-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: ./scripts/cloud-setup.sh
+      - name: Check commands in a later shell
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
