@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use crate::escape;
-use crate::lexer::{Lexer, Token};
+use crate::lexer::{is_ignored_control, Lexer, Token};
 use crate::recovery::{Diagnostic, OnMalformed, ParseOptions, ParseOutcome};
 use crate::references::ReferenceCheck;
 use crate::{
@@ -37,6 +37,19 @@ pub enum Event<S = Str> {
 pub trait EventSink<S = Str> {
     /// Receives one event. Events are delivered in source order.
     fn event(&mut self, event: Event<S>);
+
+    /// Receives one data record and its source span, from the `#` of its id
+    /// through its `;`. It is called in place of [`Self::event`] for
+    /// [`Event::DataRecord`], in the same position in source order.
+    ///
+    /// The default drops the span and forwards to [`Self::event`], so a sink
+    /// that does not need positions, such as a closure, implements only that.
+    /// The span is the one a reference diagnostic for the record reports.
+    #[inline]
+    fn data_record(&mut self, record: DataRecord<S>, span: Span) {
+        let _ = span;
+        self.event(Event::DataRecord(record));
+    }
 }
 
 impl<S, F> EventSink<S> for F
@@ -617,14 +630,14 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                     match self.parse_data_record(&id, token.span) {
                         Ok(record) => {
                             self.take_reals_without_point();
+                            let span = Span::new(start, self.last_end);
                             if let Some(check) = &mut self.references {
-                                let span = Span::new(start, self.last_end);
                                 check.record(&record, span, &mut self.diagnostics);
                             }
                             if let Some(spans) = &mut self.record_spans {
-                                spans.push(Span::new(start, self.last_end));
+                                spans.push(span);
                             }
-                            sink.event(Event::DataRecord(record));
+                            sink.data_record(record, span);
                         }
                         Err(error) => self.recover_or_fail(
                             error,
@@ -759,7 +772,9 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
     /// mistaken for a record boundary. Scanning a literal's payload as code
     /// would let recovery fabricate records that were never in the source.
     /// A section terminator stops the scan *before* it is consumed, so
-    /// recovery can never swallow the end of `DATA`.
+    /// recovery can never swallow the end of `DATA`. So does the head of the
+    /// next record, so a record missing its `;` does not take the next one
+    /// with it.
     fn resync_from(&self, from: usize) -> usize {
         // Which literal the scanner is currently inside. STEP has three, and
         // all of them can contain bytes that look like record syntax.
@@ -819,12 +834,53 @@ impl<'a, S: Text<'a>> Parser<'a, S> {
                             .map_or(self.input.len(), |offset| position + 2 + offset + 2);
                     }
                     b';' => return position + 1,
+                    b'#' if self.record_head_at(position) => return position,
                     _ if self.section_end_at(position) => return position,
                     _ => position += 1,
                 },
             }
         }
         self.input.len()
+    }
+
+    /// Whether a record head, `#digits` then `=`, starts at this `#`. Outside
+    /// a literal nothing else has that shape: a reference is followed by `,`
+    /// or `)`.
+    ///
+    /// Controls are allowed where the lexer allows them. Comments are read as
+    /// `resync_from` reads them, not through the lexer: the scan then skips
+    /// every byte this looks at past the next `#` too, which keeps recovery
+    /// linear on input built to make each `#` look ahead to the end of the file.
+    fn record_head_at(&self, position: usize) -> bool {
+        let input = self.input;
+        let mut cursor = position + 1;
+        while input.get(cursor).copied().is_some_and(is_ignored_control) {
+            cursor += 1;
+        }
+        if !input.get(cursor).is_some_and(u8::is_ascii_digit) {
+            return false;
+        }
+        while input
+            .get(cursor)
+            .is_some_and(|byte| byte.is_ascii_digit() || is_ignored_control(*byte))
+        {
+            cursor += 1;
+        }
+        loop {
+            while input.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+                cursor += 1;
+            }
+            if !input[cursor..].starts_with(b"/*") {
+                return input.get(cursor) == Some(&b'=');
+            }
+            let Some(offset) = input[cursor + 2..]
+                .windows(2)
+                .position(|window| window == b"*/")
+            else {
+                return false;
+            };
+            cursor += 2 + offset + 2;
+        }
     }
 
     fn section_end_at(&self, position: usize) -> bool {

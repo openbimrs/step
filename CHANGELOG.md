@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-11-06
+
+### Added
+
+- `EventSink::data_record(record, span)`: a provided method that gives a sink
+  each data record with its byte span, `#` through `;`. Its default forwards to
+  `event(Event::DataRecord(record))`, so existing sinks and closures keep
+  working (#18).
+
+### Fixed
+
+- Lenient recovery stops before the next `#id =` outside a literal, so a record
+  missing its `;` no longer swallows the following record without a diagnostic
+  naming it. That record is now parsed and kept, and a conflict with it is
+  reported. Recovered output changes for such files: more records, the same or
+  more diagnostics, and shorter spans. A record missing its own `=`, or hidden
+  in text by an unbalanced quote, stays inside the skip's span (#20).
+
 ## [0.11.3] - 2026-11-03
 
 ### Changed
@@ -469,7 +487,8 @@ slots) and are pinned in `tests/schema_graph.rs`.
 - Arbitrary-precision instance IDs, classic user-defined keywords, and legacy alphabet-selection decoding.
 - Incremental event parsing with bounded token buffering.
 
-[Unreleased]: https://github.com/openbimrs/step/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/openbimrs/step/compare/v0.11.4...HEAD
+[0.11.4]: https://github.com/openbimrs/step/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/openbimrs/step/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/openbimrs/step/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/openbimrs/step/compare/v0.11.0...v0.11.1

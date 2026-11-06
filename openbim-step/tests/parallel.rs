@@ -80,6 +80,40 @@ fn damaged_files_recover_and_diagnose_identically() {
     }
 }
 
+/// Recovery can resume before a record head as well as past a `;`. The slices
+/// must still land where the sequential parse does.
+#[test]
+fn records_missing_their_semicolon_recover_identically() {
+    for separator in ["\n", " ", ""] {
+        let mut records = String::new();
+        for id in 1..=2_000 {
+            let end = if id % 7 == 0 { "" } else { ";" };
+            write!(records, "#{id}=IFCPOINT(({id}.,1.)){end}{separator}")
+                .expect("writing to a String cannot fail");
+        }
+        let input = format!("{HEADER}{records}\n{FOOTER}");
+        let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
+        assert_eq!(outcome.diagnostics.len(), 2_000 / 7);
+        assert_eq!(outcome.exchange.data.records.len(), 2_000 - 2_000 / 7);
+        assert_same(input.as_bytes(), &format!("separator {separator:?}"));
+    }
+}
+
+/// Every `;` in turn removed from a file full of split-guess traps, including
+/// those inside literals, where the removal changes nothing but the payload.
+#[test]
+fn removing_any_one_semicolon_recovers_identically() {
+    let input = file(40, true);
+    let data = HEADER.len();
+    for position in data..input.len() - FOOTER.len() {
+        if input[position] == b';' {
+            let mut damaged = input.clone();
+            damaged.remove(position);
+            assert_same(&damaged, &format!("without the ';' at {position}"));
+        }
+    }
+}
+
 #[test]
 fn structural_errors_are_the_sequential_errors() {
     let good = file(500, false);
