@@ -13,6 +13,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
   `event(Event::DataRecord(record))`, so existing sinks and closures keep
   working (#18).
 
+### Fixed
+
+- Lenient recovery stops before the next `#id =` outside a literal, so a record
+  missing its `;` no longer swallows the following record without a diagnostic
+  naming it. That record is now parsed and kept, and a conflict with it is
+  reported. Recovered output changes for such files: more records, the same or
+  more diagnostics, and shorter spans. A record missing its own `=`, or hidden
+  in text by an unbalanced quote, stays inside the skip's span (#20).
+
 ## [0.11.3] - 2026-11-03
 
 ### Changed

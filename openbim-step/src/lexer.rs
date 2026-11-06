@@ -81,7 +81,7 @@ fn is_valid_binary(body: &[u8]) -> bool {
     matches!(body.first(), Some(b'0'..=b'3')) && body[1..].iter().all(u8::is_ascii_hexdigit)
 }
 
-const fn is_ignored_control(byte: u8) -> bool {
+pub(crate) const fn is_ignored_control(byte: u8) -> bool {
     matches!(byte, b'\t' | b'\n' | b'\r' | 0x0c)
 }
 

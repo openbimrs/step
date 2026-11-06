@@ -225,8 +225,13 @@ impl Diagnostic {
     /// read, and for a real without a point.
     ///
     /// A skipped record's id is that of the record where the damage started.
-    /// Its span can cover further records, whose ids are not reported, and
-    /// the id is the token that was read, not a guarantee that no kept
+    /// Recovery stops before the next `#id =` outside a literal, so a record
+    /// missing its `;` does not take the next one with it. The span can still
+    /// cover further records whose ids are not reported: one whose own `=` is
+    /// missing, and one that an unbalanced quote turned into string text,
+    /// which cannot be told from a string that really holds record syntax.
+    ///
+    /// The id is the token that was read, not a guarantee that no kept
     /// record uses it. Compare it with a dangling reference's id after
     /// removing leading zeros.
     #[must_use]

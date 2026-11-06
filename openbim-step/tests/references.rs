@@ -221,10 +221,10 @@ fn a_skipped_record_without_an_id_has_no_instance() {
     }
 }
 
-/// A record missing its `;` swallows the next one: one diagnostic, naming
-/// only the first id, with a span over both.
+/// A record missing its `;` no longer swallows the next one (#20): the next
+/// record is kept, so its id cannot be reused and a conflict is reported.
 #[test]
-fn a_skip_over_several_records_names_only_the_first() {
+fn a_record_missing_its_semicolon_leaves_the_next_record_alone() {
     let input = exchange("#1=A(1)\n#2=B();\n#3=C();");
     let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
     assert_eq!(
@@ -232,8 +232,151 @@ fn a_skip_over_several_records_names_only_the_first() {
         [(DiagnosticKind::SkippedRecord, "1".to_owned())]
     );
     let span = outcome.diagnostics[0].span();
-    assert!(input[span.start..span.end].contains("#2=B();"));
+    assert_eq!(&input[span.start..span.end], "#1=A(1)\n");
+    let kept: Vec<&str> = outcome
+        .exchange
+        .data
+        .records
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect();
+    assert_eq!(kept, ["2", "3"]);
+}
+
+/// Each record missing its `;` gets its own diagnostic.
+#[test]
+fn consecutive_records_missing_their_semicolon_are_each_named() {
+    let input = exchange("#1=A(1)\n#2=B(2)\n#3=C();");
+    let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
+    assert_eq!(
+        kinds(&outcome.diagnostics),
+        [
+            (DiagnosticKind::SkippedRecord, "1".to_owned()),
+            (DiagnosticKind::SkippedRecord, "2".to_owned()),
+        ]
+    );
     assert_eq!(outcome.exchange.data.records.len(), 1);
+}
+
+/// The damage that hid a conflicting duplicate (openbimrs/ifc#668): the record
+/// after the skip is kept, so the reference check sees it.
+#[test]
+fn a_duplicate_after_a_missing_semicolon_is_reported() {
+    let (_, diagnostics) = run(
+        "#1=A(1);\n#30=B($)\n#1=A(2);",
+        ParseOptions::lenient().check_references(true),
+    );
+    assert_eq!(
+        kinds(&diagnostics),
+        [
+            (DiagnosticKind::SkippedRecord, "30".to_owned()),
+            (DiagnosticKind::DuplicateId, "1".to_owned()),
+        ]
+    );
+}
+
+/// The next record is found however it is written: on one line, without any
+/// separator, and with what the lexer allows between `#id` and `=`.
+#[test]
+fn the_next_record_is_found_in_every_form_the_lexer_reads() {
+    for records in [
+        "#1=A(1) #2=B();",
+        "#1=A(1)#2=B();",
+        "#1=A(1)\n#2 = B();",
+        "#1=A(1)\n#2\n=B();",
+        "#1=A(1)\n#2/* c */=B();",
+        "#1=A(1)\n#\n2=B();",
+        "#1=A(1)\r\n\t#2\t=\tB();",
+    ] {
+        let input = exchange(records);
+        let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
+        assert_eq!(
+            kinds(&outcome.diagnostics),
+            [(DiagnosticKind::SkippedRecord, "1".to_owned())],
+            "{records:?}"
+        );
+        let kept: Vec<&str> = outcome
+            .exchange
+            .data
+            .records
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect();
+        assert_eq!(kept, ["2"], "{records:?}");
+    }
+}
+
+/// Record syntax in a literal is payload. Recovery must not read a record out
+/// of it, and a reference is not a record head.
+#[test]
+fn recovery_does_not_read_a_record_head_out_of_a_literal_or_a_reference() {
+    for records in [
+        "#1=A(@,'#2=B();');\n#3=C();",
+        "#1=A(@,'it''s #2=B();');\n#3=C();",
+        "#1=A(@,\"#2=B();\");\n#3=C();",
+        "#1=A(@) /* #2=B(); */\n#3=C();",
+        "#1=A(@,#2,(#4,#5),#6);\n#3=C();",
+        "#1=A(@,#2\n,#4);\n#3=C();",
+    ] {
+        let input = exchange(records);
+        let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
+        assert_eq!(
+            kinds(&outcome.diagnostics),
+            [(DiagnosticKind::SkippedRecord, "1".to_owned())],
+            "{records:?}"
+        );
+        let kept: Vec<&str> = outcome
+            .exchange
+            .data
+            .records
+            .iter()
+            .map(|record| record.id.as_str())
+            .collect();
+        assert_eq!(kept, ["3"], "{records:?}");
+    }
+}
+
+/// The limits `Diagnostic::instance` documents. A record without its `=` has
+/// no head to stop at, and an unbalanced quote hides the next record in text.
+/// Both stay inside the skip's span, so the bytes are still accounted for.
+#[test]
+fn records_recovery_cannot_tell_apart_stay_in_the_span() {
+    for (records, swallowed) in [
+        ("#1=A(1)\n#2 B();\n#3=C();", "#2 B();"),
+        ("#1=A('x);\n#2=B('y);\n#3=C();", "#2=B("),
+    ] {
+        let input = exchange(records);
+        let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
+        assert_eq!(
+            kinds(&outcome.diagnostics),
+            [(DiagnosticKind::SkippedRecord, "1".to_owned())],
+            "{records:?}"
+        );
+        let span = outcome.diagnostics[0].span();
+        assert!(
+            input[span.start..span.end].contains(swallowed),
+            "{records:?}"
+        );
+        assert_eq!(outcome.exchange.data.records.len(), 1, "{records:?}");
+    }
+}
+
+/// Looking for the next record head must not read ahead from every `#`: each
+/// of these repeats a shape that could make one `#` scan to the end of the file.
+#[test]
+fn looking_for_the_next_record_stays_linear_on_crafted_damage() {
+    const REPEATS: usize = 400_000;
+    for unit in ["#1 /\n* ", "#1 ", "#1\n", "#1 /**/ ", "# "] {
+        let input = exchange(&format!("#2=A(1 {}", unit.repeat(REPEATS)));
+        let started = std::time::Instant::now();
+        let outcome = parse_with(input.as_bytes(), ParseOptions::lenient()).unwrap();
+        assert_eq!(outcome.exchange.data.records.len(), 0, "{unit:?}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{unit:?}: {:?}",
+            started.elapsed()
+        );
+    }
 }
 
 /// One aggregation record forward-referencing many ids must stay linear:
