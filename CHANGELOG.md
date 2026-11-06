@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 
 ## [Unreleased]
 
+### Added
+
+- `EventSink::data_record(record, span)`: a provided method that gives a sink
+  each data record with its byte span, `#` through `;`. Its default forwards to
+  `event(Event::DataRecord(record))`, so existing sinks and closures keep
+  working (#18).
+
 ## [0.11.3] - 2026-11-03
 
 ### Changed
